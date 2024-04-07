@@ -15,7 +15,7 @@ class RichLogExtended(RichLog):
     BINDINGS: ClassVar[list[BindingType]] = [Binding("c", "clear", "Clear")]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, highlight=True, markup=True, wrap=True, auto_scroll=True, **kwargs)
+        super().__init__(*args, highlight=True, markup=True, wrap=True, auto_scroll=False, **kwargs)
 
     def action_clear(self) -> None:
         self.clear()

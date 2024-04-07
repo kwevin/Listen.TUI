@@ -14,8 +14,7 @@ from ..data.config import Config
 from ..data.theme import Theme
 from ..listen.client import ListenClient
 from ..listen.types import PlayStatistics, SongID
-from ..screen.modal import ConfirmScreen, SelectionScreen
-from ..screen.popup import SongScreen
+from ..screen.modal import ConfirmScreen, SelectionScreen, SongScreen
 from .base import BasePage
 from .custom import ExtendedDataTable as DataTable
 from .mpvplayer import MPVStreamPlayer
@@ -53,8 +52,7 @@ class HistoryPage(BasePage):
     def search_song(self, song_id: SongID | int) -> PlayStatistics:
         return self.history_result[SongID(song_id)]
 
-    @work(group="table")
-    async def on_mount(self) -> None:
+    def on_mount(self) -> None:
         data_table = self.query_one(DataTable)
         data_table.add_column("Id")
         data_table.add_column("Track", width=50)
@@ -150,7 +148,7 @@ class HistoryPage(BasePage):
             case _:
                 pass
 
-    @work(group="table")
+    @work(exclusive=True, group="table-update")
     async def update_history(self) -> None:
         data_table = self.query_one(DataTable)
         amount = Config.get_config().display.history_amount
@@ -163,7 +161,7 @@ class HistoryPage(BasePage):
         self.update_history()
         self.query_one(Label).update(f"Last Updated: {datetime.now().strftime('%H:%M:%S')}")
 
-    @work(group="table")
+    @work(exclusive=True, group="table-update")
     async def update_one(self) -> None:
         data_table = self.query_one(DataTable)
         data_table.loading = True

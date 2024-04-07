@@ -1,20 +1,37 @@
-import asyncio
-from typing import Any, ClassVar, Literal, Optional
+from typing import Any, ClassVar, Literal
 
 from rich.console import RenderableType
-from rich.text import Text
-from textual import on, work
+from rich.repr import Result
+from rich.text import Span, Text
+from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Container, Horizontal
 from textual.message import Message
 from textual.reactive import reactive, var
 from textual.widget import Widget
-from textual.widgets import Button, DataTable, Label, ProgressBar, Static
+from textual.widgets import Button, DataTable, Label, ListItem, ListView, ProgressBar, Static
 
 from ..data import Config, Theme
 from ..listen import ListenClient
 from ..listen.types import Song
+
+
+class TextRange:
+    def __init__(self, start: int, end: int) -> None:
+        self.start = start
+        self.end = end
+
+    def __hash__(self) -> int:
+        return hash((self.start, self.end))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, TextRange):
+            return NotImplemented
+        return (self.start, self.end) == (other.start, other.end)
+
+    def within_range(self, value: int) -> bool:
+        return value >= self.start and value < self.end
 
 
 class ScrollableLabel(Widget):
@@ -22,117 +39,273 @@ class ScrollableLabel(Widget):
     ScrollableLabel {
         height: auto;
     }
-    ScrollableLabel Container {
+    ScrollableLabel > .scrollablelabel--container {
         width: 100%;
         height: auto;
     }
-    ScrollableLabel Label {
+    ScrollableLabel > .scrollablelabel--label {
         width: auto;
         height: auto;
     }
     """
-    content: var[str] = var(str())
-    _scroll_content: var[Text] = var(Text(), init=False)
+    _texts = var(Text(), always_update=True)
+    _global_offset = var(0, always_update=True, init=False)
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
-        label: str | None = None,
-        *children: Widget,
-        name: str | None = None,
+        texts: list[Text] | str | Text | None = None,
+        sep: str = " ",
+        speed: float = 0.1,
+        hold_scroll: bool = False,
+        use_mouse_scroll: bool = False,
+        mouse_scroll_amount: int = 1,
+        auto_scroll: bool = False,
         id: str | None = None,  # noqa: A002
         classes: str | None = None,
         disabled: bool = False,
     ) -> None:
-        super().__init__(*children, name=name, id=id, classes=classes, disabled=disabled)
-        self._container = Container()
-        self._label = Label()
+        super().__init__(id=id, classes=classes, disabled=disabled)
+        self._container = Container(classes="scrollablelabel--container")
+        self._label = self._Label(classes="scrollablelabel--label")
         self._label.watch_mouse_over = self.watch_mouse_over
-        self.content = label or ""
+        self._container.watch_mouse_over = self.watch_mouse_over
+        self._sep = sep
+        self._mouse_x = -1
+        self._hold_scroll = hold_scroll
+        self._use_mouse_scroll = use_mouse_scroll
+        self._mouse_scroll_amount = mouse_scroll_amount
+        self._auto_scroll = auto_scroll
+        self._current_highlighted: TextRange = TextRange(-1, -1)
+        self._text_mapping: dict[TextRange, Text] = {}
 
-    def watch_content(self, new: str) -> None:
-        self._set_content(new)
+        if isinstance(texts, list):
+            self._generate_mapping(texts, sep)
+            self._texts = Text.from_markup(sep)
+            self._texts = self._texts.join(texts)
+        elif isinstance(texts, (str, Text)):
+            text = Text.from_markup(texts) if isinstance(texts, str) else texts
+            self._generate_mapping([text], sep)
+            self._texts = text
 
-    def watch__scroll_content(self, new: Text) -> None:
-        self._label.update(new)
+        self._content_width = 0
+        self._update_content_width()
+        self._scroll_timer = self.set_interval(speed, self._scroll, pause=True)
+        if auto_scroll and not use_mouse_scroll:
+            self._scroll_timer.resume()
 
-    def watch_mouse_over(self, value: bool) -> None:
-        if Text.from_markup(self.content).cell_len > self._container.region.width:
-            if value:
-                self.scroll_worer = self.scroll()
-            else:
-                self.scroll_worer.cancel()
-                self._set_content(self.content)
+    class _Label(Label):
+        class Click(Message):
+            def __init__(self, event: events.Click) -> None:
+                super().__init__()
+                self.event = event
+
+        class MouseMove(Message):
+            def __init__(self, event: events.MouseMove) -> None:
+                super().__init__()
+                self.event = event
+
+        class Leave(Message):
+            def __init__(self, event: events.Leave) -> None:
+                super().__init__()
+                self.event = event
+
+        def on_click(self, event: events.Click) -> None:
+            self.post_message(self.Click(event))
+
+        def on_mouse_move(self, event: events.MouseMove) -> None:
+            self.post_message(self.MouseMove(event))
+
+        def on_leave(self, event: events.Leave) -> None:
+            self.post_message(self.Leave(event))
+
+    class Clicked(Message):
+        def __init__(self, widget: "ScrollableLabel", content: Text | None, index: int) -> None:
+            super().__init__()
+            self.widget = widget
+            self.content = content
+            self.index = index
+
+    def __rich_repr__(self) -> Result:
+        yield "texts", self._texts.plain
+        yield "content_width", self.content_width
+        yield "container_width", self.container_width
+        yield "current_highlighted", f"TextRange({self._current_highlighted.start}, {self._current_highlighted.end})"
+        yield "mapping", {f"TextRange({key.start}, {key.end})": value for key, value in self._text_mapping.items()}
+
+    @property
+    def content_width(self):
+        return self._content_width
+
+    @property
+    def container_width(self):
+        return self._container.region.width
+
+    def watch__texts(self, value: Text) -> None:
+        self._label.update(value)
+
+    def watch__global_offset(self, value: int) -> None:
+        if value == 0:
+            self.workers.cancel_group(self, "scrollable-label")  # type: ignore
+        self._texts = self._new_text_with_offset()
+        self._highlight_under_mouse()
+
+    def _update_content_width(self) -> None:
+        default = self._default()
+        self._content_width = default.cell_len
+
+    def _generate_mapping(self, texts: list[Text], sep: str) -> None:
+        self._text_mapping = {}
+        start = 0
+        for text in texts:
+            text_range = TextRange(start, start + text.cell_len)
+            start += text.cell_len + Text.from_markup(sep).cell_len
+            self._text_mapping[text_range] = text
+
+    def _get_text_from_offset(self, offset: int) -> Text | None:
+        if offset < 0:
+            return None
+        for text_range in self._text_mapping:
+            if text_range.within_range(offset + self._global_offset):
+                return self._text_mapping[text_range]
+        return None
+
+    def _get_index_from_offset(self, offset: int) -> int | None:
+        if offset < 0:
+            return None
+        index = 0
+        for text_range in self._text_mapping:
+            if text_range.within_range(offset + self._global_offset):
+                return index
+            index += 1  # noqa: SIM113
+        return None
+
+    def _get_range_from_offset(self, offset: int) -> TextRange | None:
+        if offset < 0:
+            return None
+        for text_range in self._text_mapping:
+            if text_range.within_range(offset + self._global_offset):
+                return text_range
+        return None
+
+    def _reset_text(self) -> None:
+        self._texts = self._default()
+
+    def _default(self) -> Text:
+        return Text(self._sep).join(list(self._text_mapping.values()))
+
+    def _new_text_with_offset(self) -> Text:
+        default = self._default()
+        text = default.plain
+        spans = default.spans
+        new_plain = text[self._global_offset :]
+        new_spans = [
+            Span(max(span.start - self._global_offset, 0), max(span.end - self._global_offset, 0), span.style)
+            for span in spans
+        ]
+        return Text(new_plain, overflow="ellipsis", no_wrap=True, spans=new_spans)
+
+    def _highlight_text_at_offset(self, offset: int) -> None:
+        if self._current_highlighted.within_range(offset + self._global_offset):
+            return
+        text_range = self._get_range_from_offset(offset)
+        if text_range:
+            self._current_highlighted = text_range
+            new_text = self._new_text_with_offset()
+            new_text.stylize(
+                "underline",
+                max(text_range.start - self._global_offset, 0),
+                max(text_range.end - self._global_offset, 0),
+            )
+            self._texts = new_text
+
+    def _highlight_under_mouse(self) -> None:
+        text_range = self._get_range_from_offset(self._mouse_x)
+        if not text_range:
+            return
+        self._texts.stylize(
+            "underline", max(text_range.start - self._global_offset, 0), max(text_range.end - self._global_offset, 0)
+        )
+
+    def update_text(self, text: str | Text) -> None:
+        self._global_offset = 0
+        text = Text.from_markup(text) if isinstance(text, str) else text
+        self._generate_mapping([text], "")
+        self._update_content_width()
+        self._texts = text
+
+    def update_texts(self, texts: list[Text], sep: str = " ") -> None:
+        self._global_offset = 0
+        self._sep = sep
+        self._generate_mapping(texts, sep)
+        self._update_content_width()
+        text = Text.from_markup(sep)
+        self._texts = text.join(texts)
+
+    def append_text(self, text: str | Text) -> None:
+        self._global_offset = 0
+        text = Text.from_markup(text) if isinstance(text, str) else text
+        self._generate_mapping([*list(self._text_mapping.values()), text], self._sep)
+        self._update_content_width()
+        self._texts = self._default()
+
+    def set_tooltips(self, string: str | None) -> None:
+        self._label.tooltip = string
 
     def compose(self) -> ComposeResult:
         with self._container:
             yield self._label
 
-    def _set_content(self, content: str) -> None:
-        self._label.update(Text.from_markup(content))
+    def on__label_click(self, event: _Label.Click) -> None:
+        event.stop()
+        mouse_event = event.event
+        text = self._get_text_from_offset(mouse_event.x)
+        index = self._get_index_from_offset(mouse_event.x)
+        self.post_message(self.Clicked(self, text, index or -1))
 
-    def set_tooltips(self, string: str | None) -> None:
-        self._label.tooltip = string
+    def on__label_mouse_move(self, event: _Label.MouseMove) -> None:
+        event.stop()
+        mouse_event = event.event
+        self._mouse_x = mouse_event.x
+        self._highlight_text_at_offset(mouse_event.x)
 
-    @work(exclusive=True, group="scrollable-label")
-    async def scroll(self) -> None:
-        text = Text.from_markup(self.content)
-        text_raw = text.plain
-        max_offset = text.cell_len - self._container.region.width
-        speed = 0.1
-        # TODO: make this work
-        # spans: list[Span] = self._scroll_content.spans.copy()
-        # for i in range(max_offset + 1):
-        #     new_spans: list[Span] = []
-        #     for index, span in enumerate(spans):
-        #         if index == 0:
-        #             if span.start == 0:
-        #                 new_spans.append(Span(span.start, span.end - 1, span.style))
-        #             else:
-        #                 new_spans.append(span.move(-1))
-        #         else:
-        #             new_spans.append(span.move(-1))
-        #     getLogger(__name__).debug(f"text: {text_raw[i::]}\nspan: {pretty_repr(new_spans)}")
-        #     self._scroll_content = Text(text_raw[i::], overflow="ellipsis", no_wrap=True, spans=new_spans)
-        for i in range(max_offset + 1):
-            self._scroll_content = Text(text_raw[i::], overflow="ellipsis", no_wrap=True)
-            await asyncio.sleep(speed)
+    def on__label_leave(self, event: _Label.Leave) -> None:
+        event.stop()
+        self._current_highlighted = TextRange(-1, -1)
+        self._mouse_x = -1
+        self._texts = self._new_text_with_offset()
+        self._highlight_under_mouse()
+        if self._hold_scroll or self._auto_scroll:
+            return
+        self._global_offset = 0
 
+    def watch_mouse_over(self, value: bool) -> None:
+        if self._auto_scroll or self._use_mouse_scroll:
+            return
+        if self.content_width > self.container_width:
+            if value:
+                self._scroll_timer.resume()
+            else:
+                self._scroll_timer.pause()
+                if not self._hold_scroll:
+                    self._reset_text()
 
-class SongContainer(Widget):
-    DEFAULT_CSS = """
-    SongContainer {
-        width: 1fr;
-        height: auto;
-    }
-    SongContainer #artist {
-        color: rgb(249, 38, 114);
-    }
-    """
-    song: reactive[None | Song] = reactive(None, layout=True, init=False)
+    def on_mouse_scroll_down(self, event: events.MouseDown) -> None:
+        if not self._use_mouse_scroll:
+            return
+        self._global_offset = max(self._global_offset - self._mouse_scroll_amount, 0)
 
-    def __init__(self, song: Optional[Song] = None) -> None:
-        super().__init__()
-        if song:
-            self.song = song
+    def on_mouse_scroll_up(self, event: events.MouseUp) -> None:
+        if not self._use_mouse_scroll:
+            return
+        self._global_offset = min(
+            self._global_offset + self._mouse_scroll_amount, self.content_width - self.container_width
+        )
 
-    def watch_song(self, song: Song) -> None:
-        romaji_first = Config.get_config().display.romaji_first
-        self.artist = song.format_artists(romaji_first=romaji_first, embed_link=True) or ""
-        self.title = song.format_title(romaji_first=romaji_first) or ""
-        self.source = song.format_source(romaji_first=romaji_first, embed_link=True)
-        self.query_one("#artist", ScrollableLabel).content = self.artist
-        self.query_one("#title", ScrollableLabel).content = self.format_title(self.title, self.source)
-
-    def compose(self) -> ComposeResult:
-        yield ScrollableLabel(id="artist")
-        yield ScrollableLabel(id="title")
-
-    def set_tooltips(self, string: str | None) -> None:
-        self.query_one("#title", ScrollableLabel).set_tooltips(string)
-
-    def format_title(self, title: str, source: str | None) -> str:
-        source = f"[cyan]\\[{source}][/cyan]" if source else ""
-        return f"{title} {source}".strip()
+    def _scroll(self) -> None:
+        if self._global_offset < self.content_width:
+            self._global_offset += 1
+        elif self._hold_scroll or self._auto_scroll:
+            self._global_offset = 0
 
 
 class _DurationCompleteLabel(Static):
@@ -260,7 +433,7 @@ class StaticButton(Button):
     }}
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         label: str | Text | None = None,
         variant: Literal["default", "primary", "success", "warning", "error"] = "default",
@@ -296,7 +469,7 @@ class ToggleButton(StaticButton):
             super().__init__()
             self.state = state
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         label: str | Text | None = None,
         toggled_label: str | Text | None = None,
@@ -333,3 +506,69 @@ class ToggleButton(StaticButton):
 
     def update_default_label(self, label: str | Text | None) -> None:
         self._default = label
+
+
+class SongItem(ListItem):
+    DEFAULT_CSS = """
+    SongItem {
+        padding: 1 0 1 0;
+    }
+    SongItem Label {
+        margin-left: 1;
+    }
+    """
+
+    def __init__(self, song: Song):
+        self.song = song
+        romaji_first = Config.get_config().display.romaji_first
+        title = song.format_title(romaji_first=romaji_first)
+        artist = song.format_artists(show_character=False, romaji_first=romaji_first, embed_link=True)
+        super().__init__(
+            Label(
+                Text.from_markup(f"{title}"),
+                classes="item-title",
+                shrink=True,
+            ),
+            Label(
+                Text.from_markup(f"[{Theme.ACCENT}]{artist}[/]"),
+                classes="item-artist",
+            ),
+        )
+
+    class SongChildClicked(Message):
+        """For informing with the parent ListView that we were clicked"""
+
+        def __init__(self, item: "SongItem") -> None:
+            self.item = item
+            super().__init__()
+
+    async def _on_click(self, _: events.Click) -> None:
+        self.post_message(self.SongChildClicked(self))
+
+
+class ExtendedListView(ListView):
+    DEFAULT_CSS = f"""
+    ExtendedListView {{
+        height: auto;
+    }}
+    ExtendedListView SongItem {{
+        margin-bottom: 1;
+        background: {Theme.BACKGROUND};
+    }}
+    """
+
+    class SongSelected(Message):
+        def __init__(self, song: Song) -> None:
+            self.song = song
+            super().__init__()
+
+    @on(SongItem.SongChildClicked)
+    def feed_clicked(self, event: SongItem.SongChildClicked) -> None:
+        self.post_message(self.SongSelected(event.item.song))
+
+    def action_select_cursor(self) -> None:
+        """Select the current item in the list."""
+        selected_child: SongItem | None = self.highlighted_child  # type: ignore
+        if selected_child is None:
+            return
+        self.post_message(self.SongSelected(selected_child.song))

@@ -11,7 +11,7 @@ from textual.message import Message
 from textual.reactive import var
 from textual.validation import Function, Validator
 from textual.widget import Widget
-from textual.widgets import Collapsible, Input, Label, Switch, TextArea
+from textual.widgets import Collapsible, Input, Label, Static, Switch, TextArea
 
 from ..data.config import Config
 from ..listen.client import ListenClient
@@ -36,11 +36,13 @@ DOC: dict[str, str] = {
     "display.show_romaji_tooltip": "Show romaji as a tooltip on player hover",
     "display.user_feed_amount": "Amount of user feed to display",
     "display.history_amount": "Amount of history to display",
+    "display.open_in_app_browser": "Whether to open clickable content within the app",
+    "display.confirm_before_open": "Show confirmation dialog before opening a clickable content",
     "player.timeout_restart": "How long to wait before restarting the player (in seconds)",
     "player.volume_step": "How much to raise/lower volume by",
     "player.dynamic_range_compression": "Enable dynamic range compression, this will add an `af` field into `mpv_options`, will be overwritten if `mpv_options` already has an `af` field set",  # noqa: E501
     "player.mpv_options": "MPV options to pass to mpv (see https://mpv.io/manual/master/#options)",
-    "advance.verbose": "Enable verbose logging and add an additional `log` tab for debugging",
+    "advance.show_debug_tool": "Enable verbose logging and add an additional `log` tab for debugging",
 }
 
 
@@ -57,10 +59,17 @@ class Generic(Horizontal):
         height: 3;
         width: 1fr;
     }
+    Generic .filler {
+        height: 3;
+        width: 1fr;
+    }
     """
 
-    def __init__(self, setting: Setting) -> None:
-        super().__init__(id=f"setting-{setting.catagory}-{setting.option}")
+    def __init__(self, setting: Setting, append_id: bool = True) -> None:
+        if append_id:
+            super().__init__(id=f"setting-{setting.catagory}-{setting.option}")
+        else:
+            super().__init__()
         self.setting = setting
 
 
@@ -69,20 +78,21 @@ class GenericSwitch(Generic):
     GenericSwitch Label {
         height: 3;
         margin: 1 0 1 1;
-        width: 1fr;
+        width: auto;
     }
     GenericSwitch Switch {
         margin-right: 1;
     }
     """
 
-    def __init__(self, setting: Setting) -> None:
-        super().__init__(setting)
+    def __init__(self, setting: Setting, append_id: bool = True) -> None:
+        super().__init__(setting, append_id)
         self.label = setting.option
         self.default = setting.value
 
     def compose(self) -> ComposeResult:
         yield Label(str(self.label))
+        yield Static(classes="filler")
         yield Switch(value=self.default)
 
     def on_mount(self) -> None:
@@ -105,7 +115,12 @@ class GenericField(Generic):
     GenericField Label {
         height: 3;
         margin: 1 0 1 1;
+        width: auto;
+    }
+    GenericField Container {
+        height: 3;
         width: 1fr;
+        align: left middle;
     }
     GenericField Input {
         height: 3;
@@ -115,9 +130,14 @@ class GenericField(Generic):
     """
 
     def __init__(
-        self, setting: Setting, hide_input: bool = False, is_int: bool = False, validator: Optional[Validator] = None
+        self,
+        setting: Setting,
+        hide_input: bool = False,
+        is_int: bool = False,
+        validator: Optional[Validator] = None,
+        append_id: bool = True,
     ) -> None:
-        super().__init__(setting)
+        super().__init__(setting, append_id)
         self.label = setting.option
         self.value = setting.value
         self.hide_input = hide_input
@@ -126,7 +146,8 @@ class GenericField(Generic):
         self.input_type: Literal["text", "number"] = "number" if is_int else "text"
 
     def compose(self) -> ComposeResult:
-        yield Label(str(self.label))
+        yield Container(Label(str(self.label)))
+        yield Static(classes="filler")
         yield Input(value=str(self.value), type=self.input_type, password=self.hide_input, validators=self.validator)
 
     def on_mount(self) -> None:
@@ -149,7 +170,7 @@ class Login(Generic):
         width: 1fr;
         layout: vertical;
     }
-    Login Container {
+    Login > Container {
         height: auto;
         layout: horizontal;
         width: 1fr;
@@ -165,7 +186,7 @@ class Login(Generic):
         super().__init__(setting)
 
     def compose(self) -> ComposeResult:
-        yield GenericField(self.setting, hide_input=True)
+        yield GenericField(self.setting, hide_input=True, append_id=False)
         yield Container(Button("Show", id="show"), Button("Login", variant="primary", id="login"))
 
     def on_mount(self) -> None:
@@ -228,7 +249,12 @@ class MPVOptions(Generic):
 
     def compose(self) -> ComposeResult:
         with Collapsible(title="mpv_options"):
-            yield TextArea(text=json.dumps(self.default_options, indent=4), language="json")
+            yield TextArea(
+                text=json.dumps(self.default_options, indent=4),
+                theme="monokai",
+                language="json",
+                show_line_numbers=True,
+            )
 
             with Horizontal():
                 yield Button("Check", id="check")
@@ -347,14 +373,14 @@ class SettingPage(BasePage):
             "player.mpv_options": MPVOptions(Setting("player", "mpv_options", self.config["player"]["mpv_options"])),
             "presence.default_placeholder": GenericField(
                 Setting("presence", "default_placeholder", self.config["presence"]["default_placeholder"]),
-                validator=Function(lambda x: len(x) >= 2),  # noqa: PLR2004
+                validator=Function(lambda x: len(x) >= 2, failure_description="must be >= 2 characters"),  # noqa: PLR2004
             ),
         }
 
     def compose(self) -> ComposeResult:
         yield Label("• For more information, hover over the label", id="setting-info")
         for catagory in self.config:
-            if catagory == "persistant":
+            if catagory == "persistant" and not self.config["advance"]["show_debug_tool"]:
                 continue
             with Collapsible(title=catagory.capitalize()):
                 for option in self.config[catagory]:
@@ -376,7 +402,7 @@ class SettingPage(BasePage):
 
     def action_apply(self) -> None:
         self.notify("Applying changes...")
-        # TODO: unmount and mount screen without everything dying
+        self.post_message(self.Restart())
 
 
 if __name__ == "__main__":

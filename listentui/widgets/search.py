@@ -1,4 +1,4 @@
-import webbrowser
+# import webbrowser
 from random import choice as random_choice
 from typing import Any, ClassVar
 
@@ -16,8 +16,7 @@ from ..data.config import Config
 from ..data.theme import Theme
 from ..listen.client import ListenClient, RequestError
 from ..listen.types import Song, SongID
-from ..screen.modal import ConfirmScreen, SelectionScreen
-from ..screen.popup import SongScreen
+from ..screen.modal import AlbumScreen, ArtistScreen, ConfirmScreen, SelectionScreen, SongScreen, SourceScreen
 from .base import BasePage
 from .custom import ExtendedDataTable as DataTable
 from .custom import StaticButton, ToggleButton
@@ -147,11 +146,10 @@ class SearchPage(BasePage):
                 song.format_album(romaji_first=romaji_first),
                 song.format_source(romaji_first=romaji_first),
             ]
-            data_table.add_row(*row, key=f"{song.id}")
-        # data_table.refresh(layout=True)
+            data_table.add_row(*row)
 
     @work(group="table")
-    async def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
+    async def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:  # noqa: PLR0911, PLR0914
         data_table = self.query_one(DataTable)
         column = event.coordinate.column
         id_coord = Coordinate(event.coordinate.row, 0)
@@ -159,6 +157,7 @@ class SearchPage(BasePage):
         song_id = SongID(int(_id.plain))
         song = self.search_song(song_id)
         romaji_first = Config.get_config().display.romaji_first
+        client = ListenClient.get_instance()
         match column:
             case 0:
                 if not self.client.logged_in:
@@ -189,29 +188,57 @@ class SearchPage(BasePage):
             case 2:
                 if not song.artists:
                     return
+
+                player = self.app.query_one(MPVStreamPlayer)
                 if len(song.artists) == 1:
-                    if await self.app.push_screen(ConfirmScreen(label="Open Artist Page?"), wait_for_dismiss=True):
-                        webbrowser.open_new_tab(song.artists[0].link)
+                    artist = await client.artist(song.artists[0].id)
+                    if not artist:
+                        return
+                    self.app.push_screen(ArtistScreen(artist, player))
                 else:
-                    options = song.format_artists_list()
+                    options = song.format_artists_list(romaji_first=romaji_first)
                     if not options:
                         return
                     result = await self.app.push_screen(SelectionScreen(options), wait_for_dismiss=True)
                     if result is not None:
-                        webbrowser.open_new_tab(song.artists[result].link)
+                        artist = await client.artist(song.artists[result].id)
+                        if not artist:
+                            return
+                        self.app.push_screen(ArtistScreen(artist, player))
+
+                # if len(song.artists) == 1:
+                #     if await self.app.push_screen(ConfirmScreen(label="Open Artist Page?"), wait_for_dismiss=True):
+                #         webbrowser.open_new_tab(song.artists[0].link)
+                # else:
+                #     options = song.format_artists_list()
+                #     if not options:
+                #         return
+                #     result = await self.app.push_screen(SelectionScreen(options), wait_for_dismiss=True)
+                #     if result is not None:
+                #         webbrowser.open_new_tab(song.artists[result].link)
             case 3:
+                if song.album:
+                    album = await client.album(song.album.id)
+                    if not album:
+                        return
+                    self.app.push_screen(AlbumScreen(album, self.app.query_one(MPVStreamPlayer)))
                 # pylance keep saying no overload for await push_screen
-                if song.album and await self.app.push_screen(
-                    ConfirmScreen(label="Open Album Page?"),
-                    wait_for_dismiss=True,  # type: ignore
-                ):
-                    webbrowser.open_new_tab(song.album.link)
+                # if song.album and await self.app.push_screen(
+                #     ConfirmScreen(label="Open Album Page?"),
+                #     wait_for_dismiss=True,  # type: ignore
+                # ):
+                #     webbrowser.open_new_tab(song.album.link)
             case 4:
-                if song.source and await self.app.push_screen(
-                    ConfirmScreen(label="Open Source Page?"),
-                    wait_for_dismiss=True,  # type: ignore
-                ):
-                    webbrowser.open_new_tab(song.source.link)
+                if song.source:
+                    source = await client.source(song.source.id)
+                    if not source:
+                        return
+                    self.app.push_screen(SourceScreen(source, self.app.query_one(MPVStreamPlayer)))
+                # if song.source and await self.app.push_screen(
+                #     ConfirmScreen(label="Open Source Page?"),
+                #     wait_for_dismiss=True,  # type: ignore
+                # ):
+                #     webbrowser.open_new_tab(song.source.link)
             case _:
                 pass
 

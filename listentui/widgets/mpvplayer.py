@@ -25,7 +25,7 @@ class MPVStreamPlayer(Widget):
     is_playing: var[bool] = var(True, init=False)
     volume: var[int] = var(100, init=False)
 
-    class Restart(Message):
+    class Timeout(Message):
         def __init__(self) -> None:
             super().__init__()
 
@@ -64,6 +64,8 @@ class MPVStreamPlayer(Widget):
     def get_options(self) -> dict[str, Any]:
         mpv_options = Config.get_config().player.mpv_options.copy()
         mpv_options["volume"] = Config.get_config().persistant.volume
+        if self.volume == 0:
+            mpv_options["volume"] = 0
         if Config.get_config().player.dynamic_range_compression and not mpv_options.get("af"):
             mpv_options["af"] = "acompressor=ratio=4,loudnorm=I=-16:LRA=11:TP=-1.5"
 
@@ -96,7 +98,7 @@ class MPVStreamPlayer(Widget):
 
     @work(exclusive=True, group="player_reset", thread=True)
     def reset(self) -> None:
-        self.post_message(self.Restart())
+        self.post_message(self.Timeout())
         self.player.play(self.stream_url)
         self.player.wait_until_playing()
         self.post_message(self.Restarted())
@@ -114,9 +116,8 @@ class MPVStreamPlayer(Widget):
         while True:
             if self.core_idle and not self.paused:
                 if self._idle_count > timeout:
-                    self.hard_restart()
                     self._log.debug(f"Player timeout exceed: {timeout}s")
-                    self._idle_count = 0
+                    self.hard_restart()
                 else:
                     self._idle_count += 1
                     self._log.debug(
@@ -150,8 +151,8 @@ class MPVStreamPlayer(Widget):
                 level = DEBUG
         self._log.log(level=level, msg=f"[{component}] {message}")
 
-    @on(Restart)
-    def on_restart(self, event: Restart):
+    @on(Timeout)
+    def on_timeout(self, event: Timeout):
         self.workers.cancel_group(self, "player_restarter")
 
     @on(Restarted)

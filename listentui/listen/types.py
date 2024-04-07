@@ -68,6 +68,7 @@ class User:
 @dataclass
 class CurrentUser(User):
     token: str
+    password: str
 
 
 @dataclass
@@ -77,14 +78,20 @@ class Album:
     name_romaji: str | None
     image: Image | None
     songs: list[Song] | None = None
+    artists: list[Artist] | None = None
+    socials: list[Socials] | None = None
     link: str = field(init=False)
 
     def __post_init__(self):
         self.link = f"https://listen.moe/albums/{self.id}"
 
     def format_name(self, *, romaji_first: bool = True) -> str | None:
-        name = self.name_romaji or self.name if romaji_first else self.name
-        return name if name else None
+        return (self.name_romaji or self.name) if romaji_first else (self.name or self.name_romaji)
+
+    def format_socials(self, *, sep: str = ", ") -> str | None:
+        if not self.socials:
+            return None
+        return f"{sep}".join([f"[link={social.url}]{social.name}[/link]" for social in self.socials])
 
 
 @dataclass
@@ -103,10 +110,22 @@ class Artist:
 
     def __post_init__(self):
         self.link = f"https://listen.moe/artists/{self.id}"
+        total = 0
+        if self.albums:
+            for album in self.albums:
+                if album.songs:
+                    total += len(album.songs)
+        if self.songs_without_album:
+            total += len(self.songs_without_album)
+        self.song_count = total
 
     def format_name(self, *, romaji_first: bool = True) -> str | None:
-        name = self.name_romaji or self.name if romaji_first else self.name
-        return name if name else None
+        return (self.name_romaji or self.name) if romaji_first else (self.name or self.name_romaji)
+
+    def format_socials(self, *, sep: str = ", ") -> str | None:
+        if not self.socials:
+            return None
+        return f"{sep}".join([f"[link={social.url}]{social.name}[/link]" for social in self.socials])
 
 
 @dataclass
@@ -126,10 +145,22 @@ class Source:
     name: str | None
     name_romaji: str | None
     image: Image | None
+    description: str | None = None
+    socials: list[Socials] | None = None
+    songs: list[Song] | None = None
+    songs_without_album: list[Song] | None = None
     link: str = field(init=False)
 
     def __post_init__(self):
         self.link = f"https://listen.moe/sources/{self.id}"
+
+    def format_name(self, *, romaji_first: bool = True) -> str | None:
+        return (self.name_romaji or self.name) if romaji_first else (self.name or self.name_romaji)
+
+    def format_socials(self, *, sep: str = ", ") -> str | None:
+        if not self.socials:
+            return None
+        return f"{sep}".join([f"[link={social.url}]{social.name}[/link]" for social in self.socials])
 
 
 @dataclass
@@ -272,51 +303,61 @@ class Song:
             for character in characters
         ]
 
-    def _format_artists(
+    def _artist_list(
         self,
         count: Optional[int] = None,
         *,
-        show_character: bool = True,
         romaji_first: bool = True,
+        show_character: bool = False,
         embed_link: bool = False,
     ) -> list[str] | None:
         if not self.artists:
             return None
 
-        lst_string: list[str] = []
+        artists: list[str] = []
         for idx, artist in enumerate(self.artists):
             if count and idx + 1 > count:
-                break
-            name = (artist.name_romaji if artist.name_romaji else artist.name) if romaji_first else artist.name
+                return artists
 
+            character_map: dict[int, Character] = {}
             if show_character and self.characters and artist.characters:
-                character_map: dict[int, Character] = {character.id: character for character in self.characters}
-                char = next(
-                    (
-                        character_map.get(character.id)
-                        for character in artist.characters
-                        if character_map.get(character.id)
-                    ),
-                    None,
-                )
-                if name and char:
-                    char_name = (char.name_romaji if char.name_romaji else char.name) if romaji_first else char.name
-                    if embed_link:
-                        e = f"[link={char.link}]{char_name}[/link]"
-                        k = f"(CV: [link={artist.link}]{name}[/link])"
-                        lst_string.append(f"{e} {k}")
-                    else:
-                        lst_string.append(f"{char_name} (CV: {name})")
-            elif name:
-                if embed_link:
-                    lst_string.append(f"[link={artist.link}]{name}[/link]")
-                else:
-                    lst_string.append(name)
+                character_map: dict[int, Character] = {character.id: character for character in artist.characters}
 
-        return lst_string
+            name = (artist.name_romaji or artist.name) if romaji_first else (artist.name or artist.name_romaji)
+            character = None
+            character_name = None
+
+            if self.characters:
+                character = character_map.get(self.characters[0].id)
+                if character:
+                    character_name = (
+                        (character.name_romaji or character.name)
+                        if romaji_first
+                        else (character.name or character.name_romaji)
+                    )
+
+            if show_character:
+                if name and character and character_name:
+                    if embed_link:
+                        j = f"[link={character.link}]{character}[/link]"
+                        k = f"(CV: [link={artist.link}]{name}[/link])"
+                        artists.append(f"{j} {k}")
+                    else:
+                        artists.append(f"{character_name} (CV: {name})")
+                elif name:
+                    if embed_link:
+                        artists.append(f"[link={artist.link}]{name}[/link]")
+                    else:
+                        artists.append(name)
+            elif name and embed_link:
+                artists.append(f"[link={artist.link}]{name}[/link]")
+            elif name:
+                artists.append(name)
+
+        return artists
 
     def format_artists_list(self, *, romaji_first: bool = True) -> list[str] | None:
-        return self._format_artists(romaji_first=romaji_first)
+        return self._artist_list(romaji_first=romaji_first, show_character=True)
 
     def format_artists(
         self,
@@ -326,7 +367,7 @@ class Song:
         romaji_first: bool = True,
         embed_link: bool = False,
     ) -> str | None:
-        formatted_artist = self._format_artists(
+        formatted_artist = self._artist_list(
             count=count, show_character=show_character, romaji_first=romaji_first, embed_link=embed_link
         )
         if not formatted_artist:
@@ -341,13 +382,7 @@ class Song:
         return None
 
     def _format(self, albs: Union[Album, Source], romaji_first: bool = True, embed_link: bool = False) -> str | None:
-        name = (
-            (albs.name_romaji if albs.name_romaji else albs.name)
-            if romaji_first
-            else albs.name
-            if albs.name
-            else albs.name_romaji
-        )
+        name = (albs.name_romaji or albs.name) if romaji_first else (albs.name or albs.name_romaji)
         if not name:
             return None
         if embed_link:
@@ -365,8 +400,7 @@ class Song:
         return self._format(self.source, romaji_first, embed_link)
 
     def format_title(self, *, romaji_first: bool = True) -> str | None:
-        title = self.title_romaji or self.title if romaji_first else self.title
-
+        title = (self.title_romaji or self.title) if romaji_first else (self.title or self.title_romaji)
         if title:
             return self._sanitise(title)
         return None

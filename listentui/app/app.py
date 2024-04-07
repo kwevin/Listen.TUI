@@ -12,7 +12,7 @@ class ListentuiApp(App[None]):
     TITLE = "LISTEN.moe"
 
     async def on_mount(self) -> None:
-        create_logger(Config.get_config().advance.verbose)
+        create_logger(Config.get_config().advance.show_debug_tool)
         await self.login().wait()
         self.push_screen(Main())
 
@@ -38,8 +38,8 @@ class ListentuiApp(App[None]):
 
     @on(SettingPage.Restart)
     async def restart(self) -> None:
-        self.pop_screen()
         await self.login().wait()
+        await self.recompose()
         self.push_screen(Main())
 
 

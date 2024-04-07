@@ -15,7 +15,7 @@ from ..data.config import Config
 from ..data.theme import Theme
 from ..listen.client import ListenClient
 from ..listen.types import CurrentUser, Song, SystemFeed
-from ..screen.popup import SongScreen
+from ..screen.modal import SongScreen
 from ..utilities import format_time_since
 from .base import BasePage
 from .mpvplayer import MPVStreamPlayer
@@ -196,9 +196,7 @@ class UserFeed(Widget):
             SongScreen(
                 song,
                 self.app.query_one(MPVStreamPlayer),
-                True
-                if feed.type == SystemFeed.ActivityType.FAVORITED
-                else await ListenClient.get_instance().check_favorite(song.id),
+                feed.type == SystemFeed.ActivityType.FAVORITED,
             )
         )
 

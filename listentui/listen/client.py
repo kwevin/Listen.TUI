@@ -216,6 +216,17 @@ class ListenClient:
                     songs {
                         ${song}
                     }
+                    artists {
+                        ${generic}
+                        image
+                        characters {
+                            ${generic}
+                        }
+                    }
+                    links {
+                        name
+                        url
+                    }
                 }
             }
         """
@@ -232,9 +243,6 @@ class ListenClient:
                     links {
                         name
                         url
-                    }
-                    songs {
-                        count
                     }
                     albums {
                         ${generic}
@@ -286,6 +294,17 @@ class ListenClient:
                 source(id: $$id) {
                     ${generic}
                     image
+                    description
+                    links {
+                        name
+                        url
+                    }
+                    songs {
+                        ${song}
+                    }
+                    songsWithoutAlbum {
+                        ${song}
+                    }
                 }
             }
         """
@@ -416,6 +435,7 @@ class ListenClient:
                 requests=user["requests"]["count"],
                 feeds=[SystemFeed.from_data(feed) for feed in user["systemFeed"]],
                 token=token,
+                password=password,
             )
         )
 
@@ -430,12 +450,42 @@ class ListenClient:
     async def close(self) -> None:
         await self._client.close_async()
 
+    async def regenerate_token(self) -> None:
+        """regenerate a new token for the current user"""
+        if not self.logged_in or self._user is None:
+            return
+        params = {
+            "username": self._user.username,
+            "password": self._user.password,
+            "systemOffset": self.SYSTEM_OFFSET,
+            "systemCount": self.SYSTEM_COUNT,
+        }
+        try:
+            res = await self._execute(document=self._queries.login, variable_values=params)
+        except TransportQueryError as err:
+            raise Exception("Failed to generate new token") from err
+        await self._client.close_async()
+        self.headers["Authorization"] = f"Bearer {res['login']['token']}"
+        transport = AIOHTTPTransport(self.ENDPOINT, headers=self.headers)
+        self._client = Client(transport=transport, fetch_schema_from_transport=False)
+        self._session = await self._client.connect_async(reconnecting=True)  # pyright: ignore
+
+        return
+
     async def _execute(
         self, document: DocumentNode, variable_values: Optional[dict[str, Any]] = None
     ) -> dict[str, Any]:
         if not self._session:
             self._session = await self._client.connect_async(reconnecting=True)  # pyright: ignore
-        return await self._session.execute(document=document, variable_values=variable_values)  # pyright: ignore
+        try:
+            return await self._session.execute(document=document, variable_values=variable_values)  # pyright: ignore
+        except TransportQueryError as exc:
+            if not exc.errors:
+                raise exc
+            if exc.errors[0]["message"] == "Not logged in." and self._user is not None:
+                await self.regenerate_token()
+                return await self._session.execute(document=document, variable_values=variable_values)  # pyright: ignore
+            raise Exception("Failed to regenerate user token") from exc
 
     async def update_current_user(self, offset: int = 0, count: int = 5) -> CurrentUser | None:
         """update the current user with the latest data from the api"""
@@ -455,6 +505,7 @@ class ListenClient:
             user.requests,
             user.feeds,
             current_user.token,
+            current_user.password,
         )
         return self._user
 
@@ -472,6 +523,26 @@ class ListenClient:
             name_romaji=album["nameRomaji"],
             image=Image.from_source("albums", album["image"]),
             songs=[Song.from_data(song) for song in album["songs"]],
+            artists=[
+                Artist(
+                    id=artist["id"],
+                    name=artist["name"],
+                    name_romaji=artist["nameRomaji"],
+                    image=Image.from_source("artists", artist["image"]),
+                    characters=[
+                        Character(
+                            id=character["id"],
+                            name=character["name"],
+                            name_romaji=character["nameRomaji"],
+                        )
+                        for character in artist["characters"]
+                    ],
+                )
+                for artist in album["artists"]
+            ],
+            socials=[Socials(name=social["name"], url=social["url"]) for social in album["links"]]
+            if album["links"]
+            else None,
         )
 
     async def artist(self, artist_id: Union[ArtistID, int]) -> Artist | None:
@@ -490,11 +561,8 @@ class ListenClient:
             characters=[Character(character["id"]) for character in artist["characters"]]
             if len(artist["characters"]) != 0
             else None,
-            socials=[Socials(name=social["name"], url=social["url"]) for social in artist["links"]],
-            song_count=int(
-                artist["songs"]["count"] + len(artist["songsWithoutAlbum"]) if artist["songsWithoutAlbum"] else 0
-            )
-            if artist["songs"]["count"]
+            socials=[Socials(name=social["name"], url=social["url"]) for social in artist["links"]]
+            if artist["links"]
             else None,
             album_count=len(artist["albums"]) if artist["albums"] else None,
             albums=[
@@ -557,6 +625,14 @@ class ListenClient:
             name=source["name"],
             name_romaji=source["nameRomaji"],
             image=Image.from_source("sources", source["image"]),
+            description=source["description"] if source["description"] else None,
+            socials=[Socials(name=social["name"], url=social["url"]) for social in source["links"]]
+            if source["links"]
+            else None,
+            songs=[Song.from_data(song) for song in source["songs"]] if source["songs"] else None,
+            songs_without_album=[Song.from_data(song) for song in source["songsWithoutAlbum"]]
+            if len(source["songsWithoutAlbum"]) != 0
+            else None,
         )
 
     async def user(self, username: str, system_offset: int = 0, system_count: int = 5) -> User | None:
@@ -693,8 +769,8 @@ class ListenClient:
 
 #     async def main():
 #         client = ListenClient.get_instance()
-#         song = await client.song(12905)
+#         song = await client.song(20294)
 #         pprint(song)
-#         pprint(song.format_source(romaji_first=True))
+#         pprint(song.format_artists_list(romaji_first=True))
 
 #     asyncio.run(main())

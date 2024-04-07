@@ -65,6 +65,10 @@ class Display:
     """Amount of user feed to show"""
     history_amount: int = 100
     """Amount of history to show"""
+    open_in_app_browser: bool = True
+    """Whether to open clickable content within the app"""
+    confirm_before_open: bool = False
+    """Show confirmation dialog before opening a clickable content"""
 
 
 @dataclass
@@ -92,7 +96,7 @@ class Player:
 
 @dataclass
 class Advance:
-    verbose: bool = False
+    show_debug_tool: bool = False
     """Enable verbose logging and more"""
 
 

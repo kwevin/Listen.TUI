@@ -12,9 +12,9 @@ from ..data import Config, Theme
 from ..listen import Event, Requester
 from ..listen.client import ListenClient
 from .base import BasePage
-from .custom import SongContainer, ToggleButton
+from .custom import ToggleButton
 from .mpvplayer import MPVStreamPlayer
-from .websocket import ListenWebsocket
+from .websocket import ListenWebsocket, SongContainer
 
 
 class VanityBar(Widget):
@@ -111,7 +111,7 @@ class PlayButton(ToggleButton):
 
 class FavoriteButton(ToggleButton):
     def __init__(self):
-        super().__init__("Favorite", check_user=True)
+        super().__init__("Favorite", check_user=True, id="favoritebutton")
 
 
 class VolumeButton(ToggleButton):
@@ -119,7 +119,7 @@ class VolumeButton(ToggleButton):
     muted: var[bool] = var(False, init=False)
 
     def __init__(self):
-        super().__init__(f"Volume: {self.volume}", "Muted")
+        super().__init__(f"Volume: {Config.get_config().persistant.volume}", "Muted")
 
     def watch_volume(self, new: int) -> None:
         if new == 0:
@@ -214,8 +214,10 @@ class PlayerPage(BasePage):
                 yield Static(id="filler")
                 yield VolumeButton()
 
-    def on_mount(self) -> None:
-        return
+    # def on_mount(self) -> None:
+    #    border-top: round {Theme.ACCENT};
+    #    border-title-align: center;
+    # self.query_one(Vertical).border_title = " Requested by Test Subject "
 
     def action_play_pause(self) -> None:
         play_button = self.query_one(PlayButton)
@@ -242,7 +244,7 @@ class PlayerPage(BasePage):
         self.query_one(PlayButton).is_playing = True
         self.query_one(MPVStreamPlayer).hard_restart()
 
-    @on(FavoriteButton.Pressed)
+    @on(FavoriteButton.Pressed, "#favoritebutton")
     @work(group="player_button")
     async def favorite(self) -> None:
         client = ListenClient.get_instance()

@@ -4,18 +4,83 @@ import time
 
 # from datetime import datetime, timezone
 from logging import getLogger
-from typing import Any
+from typing import Any, Optional
 
 import websockets.client as websockets
+from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
 from textual.message import Message
+from textual.reactive import reactive
 from textual.widget import Widget
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
-from ..data import Theme
-from ..listen.types import ListenWsData
-from .custom import DurationProgressBar, SongContainer
+from ..data import Config, Theme
+from ..listen import ListenClient
+from ..listen.types import ListenWsData, Song
+from ..screen.modal import ArtistScreen, SourceScreen
+from .custom import DurationProgressBar, ScrollableLabel
+from .mpvplayer import MPVStreamPlayer
+
+
+class SongContainer(Widget):
+    DEFAULT_CSS = """
+    SongContainer {
+        width: 1fr;
+        height: auto;
+    }
+    SongContainer #artist {
+        color: rgb(249, 38, 114);
+    }
+    """
+    song: reactive[None | Song] = reactive(None, layout=True, init=False)
+
+    def __init__(self, song: Optional[Song] = None) -> None:
+        super().__init__()
+        if song:
+            self.song = song
+
+    def watch_song(self, song: Song) -> None:
+        romaji_first = Config.get_config().display.romaji_first
+        self.artist = song.format_artists_list(romaji_first=romaji_first) or []
+        self.title = song.format_title(romaji_first=romaji_first) or ""
+        self.source = song.format_source(romaji_first=romaji_first)
+        self.query_one("#artist", ScrollableLabel).update_texts(
+            [Text.from_markup(artist) for artist in self.artist], sep=", "
+        )
+        self.query_one("#title", ScrollableLabel).update_text(Text.from_markup(f"{self.title}"))
+        if self.source:
+            self.query_one("#title", ScrollableLabel).append_text(Text.from_markup(f"[cyan]\\[{self.source}][/cyan]"))
+
+    def compose(self) -> ComposeResult:
+        yield ScrollableLabel(id="artist")
+        yield ScrollableLabel(id="title")
+
+    async def on_scrollable_label_clicked(self, event: ScrollableLabel.Clicked) -> None:
+        if not self.song:
+            return
+        player = self.app.query_one(MPVStreamPlayer)
+        client = ListenClient.get_instance()
+        if event.widget.id == "artist":
+            if not self.song.artists:
+                return
+            artist_id = self.song.artists[event.index].id
+            artist = await client.artist(artist_id)
+            if not artist:
+                return
+            self.app.push_screen(ArtistScreen(artist, player))
+        elif event.widget.id == "title":
+            if event.index == 1:
+                if not self.song.source:
+                    return
+                source_id = self.song.source.id
+                source = await client.source(source_id)
+                if not source:
+                    return
+                self.app.push_screen(SourceScreen(source, player))
+
+    def set_tooltips(self, string: str | None) -> None:
+        self.query_one("#title", ScrollableLabel).set_tooltips(string)
 
 
 class ListenWebsocket(Widget):
