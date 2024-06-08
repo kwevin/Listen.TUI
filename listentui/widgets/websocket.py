@@ -45,12 +45,10 @@ class SongContainer(Widget):
         self.artist = song.format_artists_list(romaji_first=romaji_first) or []
         self.title = song.format_title(romaji_first=romaji_first) or ""
         self.source = song.format_source(romaji_first=romaji_first)
-        self.query_one("#artist", ScrollableLabel).update_texts(
-            [Text.from_markup(artist) for artist in self.artist], sep=", "
-        )
-        self.query_one("#title", ScrollableLabel).update_text(Text.from_markup(f"{self.title}"))
+        self.query_one("#artist", ScrollableLabel).update(*[Text.from_markup(artist) for artist in self.artist])
+        self.query_one("#title", ScrollableLabel).update(Text.from_markup(f"{self.title}"))
         if self.source:
-            self.query_one("#title", ScrollableLabel).append_text(Text.from_markup(f"[cyan]\\[{self.source}][/cyan]"))
+            self.query_one("#title", ScrollableLabel).append(Text.from_markup(f"[cyan]\\[{self.source}][/cyan]"))
 
     def compose(self) -> ComposeResult:
         yield ScrollableLabel(id="artist")
@@ -80,7 +78,7 @@ class SongContainer(Widget):
                 self.app.push_screen(SourceScreen(source, player))
 
     def set_tooltips(self, string: str | None) -> None:
-        self.query_one("#title", ScrollableLabel).set_tooltips(string)
+        self.query_one("#title", ScrollableLabel).tooltip = string
 
 
 class ListenWebsocket(Widget):

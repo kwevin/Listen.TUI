@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Optional
 
+from rich.text import Text
 from textual import events, on, work
 from textual.app import ComposeResult
 from textual.binding import BindingType
@@ -199,11 +200,23 @@ class SongScreen(Screen[bool]):
             yield Label("Album")
             yield Label("Source")
             yield Container(
-                ScrollableLabel(self.song.format_title(romaji_first=self.romaji_first) or "", id="title"),
-                ScrollableLabel(self.song.format_artists(romaji_first=self.romaji_first) or "", id="artist"),
+                ScrollableLabel(
+                    Text.from_markup(self.song.format_title(romaji_first=self.romaji_first) or ""), id="title"
+                ),
+                ScrollableLabel(
+                    Text.from_markup(self.song.format_artists(romaji_first=self.romaji_first) or ""), id="artist"
+                ),
             )
-            yield Container(ScrollableLabel(self.song.format_album(romaji_first=self.romaji_first) or "", id="album"))
-            yield Container(ScrollableLabel(self.song.format_source(romaji_first=self.romaji_first) or "", id="source"))
+            yield Container(
+                ScrollableLabel(
+                    Text.from_markup(self.song.format_album(romaji_first=self.romaji_first) or ""), id="album"
+                )
+            )
+            yield Container(
+                ScrollableLabel(
+                    Text.from_markup(self.song.format_source(romaji_first=self.romaji_first) or ""), id="source"
+                )
+            )
             yield Label(f"Duration: {self.song.duration}", id="duration")
             yield Label(
                 f"Last played: {format_time_since(self.song.last_played, True) if self.song.last_played else None}",
@@ -227,6 +240,7 @@ class SongScreen(Screen[bool]):
                 if not self.song.artists:
                     return
                 if len(self.song.artists) == 1:
+                    self.notify_fetch(self.song.format_artists(romaji_first=self.romaji_first) or "")
                     artist = await client.artist(self.song.artists[0].id)
                     if not artist:
                         return
@@ -244,6 +258,7 @@ class SongScreen(Screen[bool]):
             case "album":
                 if not self.song.album:
                     return
+                self.notify_fetch(self.song.album.format_name(romaji_first=self.romaji_first) or "")
                 album = await client.album(self.song.album.id)
                 if not album:
                     return
@@ -251,12 +266,16 @@ class SongScreen(Screen[bool]):
             case "source":
                 if not self.song.source:
                     return
+                self.notify_fetch(self.song.source.format_name(romaji_first=self.romaji_first) or "")
                 source = await client.source(self.song.source.id)
                 if not source:
                     return
                 self.app.push_screen(SourceScreen(source, self.player))
             case _:
                 return
+
+    def notify_fetch(self, msg: str) -> None:
+        self.notify(f"Fetching data for {msg}...")
 
     def on_mount(self) -> None:
         self.query_one("#favorite", ToggleButton).set_toggle_state(self.is_favorited)
