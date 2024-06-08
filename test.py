@@ -24,6 +24,10 @@ from textual.screen import ModalScreen, Screen
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Label, ListItem, ListView, ProgressBar, RichLog, Static
 
+from listentui.listen.client import ListenClient
+from listentui.listen.types import Song
+from listentui.utilities import format_time_since
+
 
 class TextRange:
     def __init__(self, start: int, end: int) -> None:
@@ -69,7 +73,7 @@ class ScrollableLabel(Widget):
     def __init__(
         self,
         *texts: Text,
-        sep: str = " ",
+        sep: str = ", ",
         can_scroll: bool = True,
         speed: float = 0.1,
         use_mouse_scroll: bool = False,
@@ -109,12 +113,16 @@ class ScrollableLabel(Widget):
         yield "cell_offset", self._cell_offset
         yield "min_scroll", self._min_scroll
         yield "max_scroll", self._max_scroll
-        yield "current_highlighted", self._current_highlighted
+        yield "current_highlighted", f"TextRange({self._current_highlighted.start}, {self._current_highlighted.end})"
+        yield "is_scrolling", self._is_scrolling
         yield "mouse_pos", self._mouse_pos
         yield "mapping", {f"TextRange({key.start}, {key.end})": value for key, value in self._text_mapping.items()}
         yield (
             "cell_mapping",
-            {f"TextRange({key.start}, {key.end})": value for key, value in self._text_cell_mapping.items()},
+            {
+                f"TextRange({key.start}, {key.end})": f"TextRange({value.start}, {value.end})"
+                for key, value in self._text_cell_mapping.items()
+            },
         )
         yield "spans", self.text.spans
 
@@ -168,6 +176,9 @@ class ScrollableLabel(Widget):
             return
         self._highlight_under_mouse()
 
+    def _watch_text(self, old: Text, new: Text) -> None:
+        self.log.debug(f"{old} ==> {new}")
+
     def _get_range_from_offset(self, offset: int) -> TextRange | None:
         if offset < 0:
             return None
@@ -181,7 +192,6 @@ class ScrollableLabel(Widget):
             return
         text_range = self._get_range_from_offset(self._mouse_pos)
         if not text_range:
-            self._current_highlighted = TextRange(-1, -1)
             self._remove_underline()
             return
         if self._current_highlighted == text_range and not forced:
@@ -197,6 +207,7 @@ class ScrollableLabel(Widget):
         return [span for span in spans if span.style != "underline"]
 
     def _remove_underline(self):
+        self._current_highlighted = TextRange(-1, -1)
         self.text = Text(
             self.text.plain, overflow="ellipsis", no_wrap=True, spans=self._strip_underline(self.text.spans)
         )
@@ -286,6 +297,7 @@ class ScrollableLabel(Widget):
         self.post_message(self.Clicked(self, content[0], content[1]))
 
     def _on_leave(self, event: events.Leave) -> None:
+        self.log.debug("event: _on_leave")
         self._mouse_pos = -1
         self._current_highlighted = TextRange(-1, -1)
         self._remove_underline()
@@ -340,81 +352,143 @@ class ScrollableLabel(Widget):
         self._unscroll_timer.resume()
 
 
+class SongScreen(Screen[bool]):
+    """Screen for displaying Song details"""
+
+    DEFAULT_CSS = """
+    SongScreen {
+        align: center middle;
+        background: $background;
+    }
+    SongScreen ScrollableLabel {
+        height: 1;
+    }
+    SongScreen #artist {
+        color: red;
+    }
+    SongScreen Grid {
+        grid-size: 3 4;
+        grid-gutter: 1 2;
+        grid-rows: 1 3 2 1fr;
+        padding: 0 2;
+        width: 96;
+        height: 14;
+        border: thick $background 80%;
+        background: $surface;
+    }
+    SongScreen > Container {
+        height: 3;
+        width: 100%;
+        align: left middle;
+    }
+    SongScreen Horizontal {
+        column-span: 3;
+        width: 100%;
+        align: center middle;
+    }
+    SongScreen Horizontal > * {
+        margin-right: 1;
+    }
+    SongScreen StaticButton {
+        min-width: 13;
+    }
+    SongScreen #favorite {
+        min-width: 14;
+    }
+    """
+    BINDINGS: ClassVar[list[BindingType]] = [
+        ("escape", "cancel"),
+    ]
+
+    def __init__(self, song: Song, favorited: bool = False):
+        super().__init__()
+        self.song = song
+        self.is_favorited = favorited
+
+    def compose(self) -> ComposeResult:
+        with Grid():
+            yield Label("Track/Artist")
+            yield Label("Album")
+            yield Label("Source")
+            yield Container(
+                ScrollableLabel(Text.from_markup(self.song.format_title(romaji_first=False) or ""), id="title"),
+                ScrollableLabel(
+                    *[Text.from_markup(artist) for artist in a]
+                    if (a := self.song.format_artists_list(romaji_first=False)) is not None
+                    else [],
+                    id="artist",
+                ),
+            )
+            yield Container(
+                ScrollableLabel(Text.from_markup(self.song.format_album(romaji_first=False) or ""), id="album")
+            )
+            yield Container(
+                ScrollableLabel(Text.from_markup(self.song.format_source(romaji_first=False) or ""), id="source")
+            )
+            yield Label(f"Duration: {self.song.duration}", id="duration")
+            yield Label(
+                f"Last played: {format_time_since(self.song.last_played, True) if self.song.last_played else None}",
+                id="last_play",
+            )
+            yield Label(f"Time played: {self.song.played}", id="time_played")
+            with Horizontal(id="horizontal"):
+                yield Button("Preview", id="preview")
+                yield ProgressBar(total=0)
+                yield Button("Favorite", id="favorite")
+                yield Button("Request", id="request")
+
+    async def on_scrollable_label_clicked(self, event: ScrollableLabel.Clicked) -> None:  # noqa: PLR0911
+        container_id = event.widget.id
+        client = ListenClient.get_instance()
+        if not container_id:
+            return
+        match container_id:
+            case "artist":
+                if not self.song.artists:
+                    return
+                if len(self.song.artists) == 1:
+                    artist = await client.artist(self.song.artists[0].id)
+                    if not artist:
+                        return
+                    self.notify("Pushing artist screen")
+                else:
+                    artist = await client.artist(self.song.artists[event.index].id)
+                    if not artist:
+                        raise Exception("Cannot be no artist")
+                    self.notify("Pushing artist screen")
+            case "album":
+                if not self.song.album:
+                    return
+                album = await client.album(self.song.album.id)
+                if not album:
+                    return
+                self.notify("Pushing album screen")
+            case "source":
+                if not self.song.source:
+                    return
+                source = await client.source(self.song.source.id)
+                if not source:
+                    return
+                self.notify("Pushing source screen")
+            case _:
+                return
+
+
 if __name__ == "__main__":
     from textual.app import App, ComposeResult
 
     class MyApp(App[None]):
         DEFAULT_CSS = """
-        Screen {
-            align: center middle;
-        }
-        Screen Grid {
-            grid-size: 4;
-            grid-columns: 1fr;
-            grid-rows: 20;
-            grid-gutter: 2;
-            height: auto;
-            width: 100%;
-        }
-        Screen #grid2 {
-            grid-size: 4;
-            grid-gutter: 2;
-            height: 1fr;
-            width: 1fr;
-        }
-        Screen #grid2 RichLog {
-            height: 1fr;
-        }
         """
 
         def compose(self) -> ComposeResult:
-            with Grid():
-                yield ScrollableLabel(
-                    Text("～アニメガタリ同好会のテーマ～"),  # noqa: RUF001
-                    Text.from_markup("[cyan]\\[Animegatari][/]"),
-                    id="scrol1",
-                    can_scroll=False,
-                )
-                yield ScrollableLabel(
-                    Text("lorem ipsum something something i forgot"),
-                    Text.from_markup("[link=https://listen.moe/][red]hyperlink also works[/]"),
-                    Text("between two paragraph"),
-                    id="scrol2",
-                )
-                yield ScrollableLabel(
-                    Text("who needs good looking carosel, am i right"),
-                    Text("アニメを語レ! ～アニメガタリ同好会のテーマ～"),  # noqa: RUF001
-                    Text("this is a mess"),
-                    id="scrol3",
-                    use_mouse_scroll=True,
-                    auto_return=False,
-                )
-                yield ScrollableLabel(id="scrol4")
-            with Grid(id="grid2"):
-                yield RichLog(highlight=True, id="test1")
-                yield RichLog(highlight=True, id="test2")
-                yield RichLog(highlight=True, id="test3")
-                yield RichLog(highlight=True, id="test4")
+            yield Label("Click!")
 
-        def on_mount(self) -> None:
-            self.set_interval(0.1, self.upd)
-            self.query_one("#scrol4", ScrollableLabel).update(
-                Text("please work i beg you, this is hurting my brain so many logics")
-            )
-            for _ in range(3):
-                self.query_one("#scrol4", ScrollableLabel).append(
-                    Text.from_markup("[red]アニメを語レ! ～アニメガタリ同好会のテーマ～[/red]")  # noqa: RUF001
-                )
-                self.query_one("#scrol4", ScrollableLabel).append(Text.from_markup("[blue]onegai~ shimasu[/blue]"))
-
-        def upd(self) -> None:
-            ids = ["1", "2", "3", "4"]
-
-            for id in ids:  # noqa: A001
-                log = self.query_one("#test" + id, RichLog)
-                label = self.query_one("#scrol" + id, ScrollableLabel)
-                log.clear()
-                log.write(Pretty(label))
+        @work
+        async def on_click(self) -> None:
+            client = ListenClient.get_instance()
+            song = await client.song(14949)
+            await self.push_screen_wait(SongScreen(song))
 
     app = MyApp()
     app.run()
