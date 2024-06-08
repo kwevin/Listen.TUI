@@ -1,4 +1,3 @@
-import webbrowser
 from datetime import datetime
 from typing import Any, ClassVar
 
@@ -14,7 +13,7 @@ from ..data.config import Config
 from ..data.theme import Theme
 from ..listen.client import ListenClient
 from ..listen.types import PlayStatistics, SongID
-from ..screen.modal import ConfirmScreen, SelectionScreen, SongScreen
+from ..screen.modal import AlbumScreen, ArtistScreen, ConfirmScreen, SelectionScreen, SongScreen, SourceScreen
 from .base import BasePage
 from .custom import ExtendedDataTable as DataTable
 from .mpvplayer import MPVStreamPlayer
@@ -93,6 +92,7 @@ class HistoryPage(BasePage):
         song_id = SongID(int(_id.plain))
         song = self.search_song(song_id).song
         romaji_first = Config.get_config().display.romaji_first
+        client = ListenClient.get_instance()
         match column:
             case 0:
                 if not self.client.logged_in:
@@ -121,30 +121,37 @@ class HistoryPage(BasePage):
                     Text(str(song_id), style=f"{Theme.ACCENT}") if favorited_state else Text(str(song_id)),
                 )
             case 4:
-                if song.artists:
-                    if len(song.artists) == 1:
-                        if await self.app.push_screen(ConfirmScreen(label="Open Artist Page?"), wait_for_dismiss=True):
-                            webbrowser.open_new_tab(song.artists[0].link)
-                    else:
-                        options = song.format_artists_list()
-                        if not options:
+                if not song.artists:
+                    return
+
+                player = self.app.query_one(MPVStreamPlayer)
+                if len(song.artists) == 1:
+                    artist = await client.artist(song.artists[0].id)
+                    if not artist:
+                        return
+                    self.app.push_screen(ArtistScreen(artist, player))
+                else:
+                    options = song.format_artists_list(romaji_first=romaji_first)
+                    if not options:
+                        return
+                    result = await self.app.push_screen(SelectionScreen(options), wait_for_dismiss=True)
+                    if result is not None:
+                        artist = await client.artist(song.artists[result].id)
+                        if not artist:
                             return
-                        result = await self.app.push_screen(SelectionScreen(options), wait_for_dismiss=True)
-                        if result is not None:
-                            webbrowser.open_new_tab(song.artists[result].link)
+                        self.app.push_screen(ArtistScreen(artist, player))
             case 5:
-                # pylance keep saying no overload for await push_screen
-                if song.album and await self.app.push_screen(
-                    ConfirmScreen(label="Open Album Page?"),
-                    wait_for_dismiss=True,  # type: ignore
-                ):
-                    webbrowser.open_new_tab(song.album.link)
+                if song.album:
+                    album = await client.album(song.album.id)
+                    if not album:
+                        return
+                    self.app.push_screen(AlbumScreen(album, self.app.query_one(MPVStreamPlayer)))
             case 6:
-                if song.source and await self.app.push_screen(
-                    ConfirmScreen(label="Open Source Page?"),
-                    wait_for_dismiss=True,  # type: ignore
-                ):
-                    webbrowser.open_new_tab(song.source.link)
+                if song.source:
+                    source = await client.source(song.source.id)
+                    if not source:
+                        return
+                    self.app.push_screen(SourceScreen(source, self.app.query_one(MPVStreamPlayer)))
             case _:
                 pass
 

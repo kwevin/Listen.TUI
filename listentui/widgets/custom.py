@@ -96,12 +96,16 @@ class ScrollableLabel(Widget):
         yield "cell_offset", self._cell_offset
         yield "min_scroll", self._min_scroll
         yield "max_scroll", self._max_scroll
+        yield "current_highlighted", f"TextRange({self._current_highlighted.start}, {self._current_highlighted.end})"
         yield "is_scrolling", self._is_scrolling
         yield "mouse_pos", self._mouse_pos
         yield "mapping", {f"TextRange({key.start}, {key.end})": value for key, value in self._text_mapping.items()}
         yield (
             "cell_mapping",
-            {f"TextRange({key.start}, {key.end})": value for key, value in self._text_cell_mapping.items()},
+            {
+                f"TextRange({key.start}, {key.end})": f"TextRange({value.start}, {value.end})"
+                for key, value in self._text_cell_mapping.items()
+            },
         )
         yield "spans", self.text.spans
 
@@ -155,6 +159,9 @@ class ScrollableLabel(Widget):
             return
         self._highlight_under_mouse()
 
+    def _watch_text(self, old: Text, new: Text) -> None:
+        self.log.debug(f"{old} ==> {new}")
+
     def _get_range_from_offset(self, offset: int) -> TextRange | None:
         if offset < 0:
             return None
@@ -183,6 +190,7 @@ class ScrollableLabel(Widget):
         return [span for span in spans if span.style != "underline"]
 
     def _remove_underline(self):
+        self._current_highlighted = TextRange(-1, -1)
         self.text = Text(
             self.text.plain, overflow="ellipsis", no_wrap=True, spans=self._strip_underline(self.text.spans)
         )
@@ -272,6 +280,7 @@ class ScrollableLabel(Widget):
         self.post_message(self.Clicked(self, content[0], content[1]))
 
     def _on_leave(self, event: events.Leave) -> None:
+        self.log.debug("event: _on_leave")
         self._mouse_pos = -1
         self._current_highlighted = TextRange(-1, -1)
         self._remove_underline()

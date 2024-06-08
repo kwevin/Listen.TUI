@@ -7,6 +7,7 @@ from time import time
 from typing import Any, Literal, NewType, Optional, Self, Type, Union
 
 from markdownify import markdownify  # type: ignore
+from textual.widgets import Markdown  # type: ignore
 
 AlbumID = NewType("AlbumID", int)
 ArtistID = NewType("ArtistID", int)
@@ -161,6 +162,9 @@ class Source:
         if not self.socials:
             return None
         return f"{sep}".join([f"[link={social.url}]{social.name}[/link]" for social in self.socials])
+
+    def description_to_markdown(self) -> str | None:
+        return markdownify(self.description)  # type: ignore
 
 
 @dataclass

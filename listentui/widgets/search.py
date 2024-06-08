@@ -25,7 +25,7 @@ from .mpvplayer import MPVStreamPlayer
 
 class FavoriteButton(ToggleButton):
     def __init__(self):
-        super().__init__("Toggle Favorite Only", check_user=True)
+        super().__init__("Toggle Favorite Only", "Favorited Only", check_user=True)
 
 
 class RandomSongButton(StaticButton):
@@ -205,40 +205,18 @@ class SearchPage(BasePage):
                         if not artist:
                             return
                         self.app.push_screen(ArtistScreen(artist, player))
-
-                # if len(song.artists) == 1:
-                #     if await self.app.push_screen(ConfirmScreen(label="Open Artist Page?"), wait_for_dismiss=True):
-                #         webbrowser.open_new_tab(song.artists[0].link)
-                # else:
-                #     options = song.format_artists_list()
-                #     if not options:
-                #         return
-                #     result = await self.app.push_screen(SelectionScreen(options), wait_for_dismiss=True)
-                #     if result is not None:
-                #         webbrowser.open_new_tab(song.artists[result].link)
             case 3:
                 if song.album:
                     album = await client.album(song.album.id)
                     if not album:
                         return
                     self.app.push_screen(AlbumScreen(album, self.app.query_one(MPVStreamPlayer)))
-                # pylance keep saying no overload for await push_screen
-                # if song.album and await self.app.push_screen(
-                #     ConfirmScreen(label="Open Album Page?"),
-                #     wait_for_dismiss=True,  # type: ignore
-                # ):
-                #     webbrowser.open_new_tab(song.album.link)
             case 4:
                 if song.source:
                     source = await client.source(song.source.id)
                     if not source:
                         return
                     self.app.push_screen(SourceScreen(source, self.app.query_one(MPVStreamPlayer)))
-                # if song.source and await self.app.push_screen(
-                #     ConfirmScreen(label="Open Source Page?"),
-                #     wait_for_dismiss=True,  # type: ignore
-                # ):
-                #     webbrowser.open_new_tab(song.source.link)
             case _:
                 pass
 

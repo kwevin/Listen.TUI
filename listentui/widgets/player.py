@@ -108,10 +108,14 @@ class PlayButton(ToggleButton):
         self.add_class("-disabled")
         self.disabled = True
 
+    def toggle(self) -> None:
+        self.toggle_state()
+        self.is_playing = not self.is_playing
+
 
 class FavoriteButton(ToggleButton):
     def __init__(self):
-        super().__init__("Favorite", check_user=True, id="favoritebutton")
+        super().__init__("Favorite", "Favorited", check_user=True, id="favoritebutton")
 
 
 class VolumeButton(ToggleButton):
@@ -155,6 +159,10 @@ class VolumeButton(ToggleButton):
         if self.muted:
             return
         self.volume += 1
+
+    def toggle(self) -> None:
+        self.toggle_state()
+        self.muted = not self.muted
 
 
 class PlayerPage(BasePage):
@@ -214,14 +222,9 @@ class PlayerPage(BasePage):
                 yield Static(id="filler")
                 yield VolumeButton()
 
-    # def on_mount(self) -> None:
-    #    border-top: round {Theme.ACCENT};
-    #    border-title-align: center;
-    # self.query_one(Vertical).border_title = " Requested by Test Subject "
-
     def action_play_pause(self) -> None:
         play_button = self.query_one(PlayButton)
-        play_button.is_playing = not play_button.is_playing
+        play_button.toggle()
 
     def action_favorite(self) -> None:
         favorite_button = self.query_one(FavoriteButton)
@@ -238,7 +241,7 @@ class PlayerPage(BasePage):
 
     def action_mute(self) -> None:
         volume_button = self.query_one(VolumeButton)
-        volume_button.toggle_state()
+        volume_button.toggle()
 
     def action_restart(self) -> None:
         self.query_one(PlayButton).is_playing = True

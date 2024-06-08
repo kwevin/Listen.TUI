@@ -250,9 +250,9 @@ class MPVOptions(Generic):
     def compose(self) -> ComposeResult:
         with Collapsible(title="mpv_options"):
             yield TextArea(
-                text=json.dumps(self.default_options, indent=4),
-                theme="monokai",
+                json.dumps(self.default_options, indent=4),
                 language="json",
+                theme="monokai",
                 show_line_numbers=True,
             )
 

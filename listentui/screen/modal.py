@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Optional
 
+from rich.pretty import Pretty
 from rich.text import Text
 from textual import events, on, work
 from textual.app import ComposeResult
@@ -9,7 +10,7 @@ from textual.binding import BindingType
 from textual.containers import Center, Container, Grid, Horizontal, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Button, Collapsible, Label, ListView
+from textual.widgets import Button, Collapsible, Label, ListView, Markdown
 
 from ..data import Config
 from ..data.theme import Theme
@@ -44,13 +45,16 @@ class SourceScreen(ModalScreen[None]):
     SourceScreen Center {
         margin-top: 1;
     }
-    SourceScreen Horizontal {
-        width: 100%;
-        height: auto;
-        margin-bottom: 1;
-    }
-    SourceScreen Horizontal Label {
-        margin-right: 1;
+    # SourceScreen Horizontal {
+    #     width: 100%;
+    #     height: auto;
+    #     margin-bottom: 1;
+    # }
+    # SourceScreen Horizontal Label {
+    #     margin-right: 1;
+    # }
+    SourceScreen Markdown {
+        margin: 1 2 0 0;
     }
     SourceScreen > * {
         padding-left: 2;
@@ -72,11 +76,16 @@ class SourceScreen(ModalScreen[None]):
         self.romaji_first = Config.get_config().display.romaji_first
         self.source = source
         self.player = player
+        self._description_widget = (
+            Collapsible(Markdown(self.source.description_to_markdown()), title="Description")
+            if self.source.description
+            else Label("- No description -")
+        )
 
     def compose(self) -> ComposeResult:
         with Container(id="box"):
             yield Center(Label(id="name"))
-            yield Label(id="source-description")
+            yield self._description_widget
             yield Label(id="links")
             with VerticalScroll():
                 if self.source.songs:
@@ -130,7 +139,9 @@ class SourceScreen(ModalScreen[None]):
 
     async def on_mount(self) -> None:
         self.query_one("#name", Label).update(self.source.format_name(romaji_first=self.romaji_first) or "")
-        self.query_one("#source-description", Label).update(f"{self.source.description or '- No description -'}")
+        # self.query_one("#source-description", Markdown).update(
+        #     f"{self.source.description_to_markdown() or '- No description -'}"
+        # )
         self.query_one("#links", Label).update(
             f"{self.source.format_socials(sep=' ') or '- No links for this source yet - '}"
         )
@@ -204,7 +215,10 @@ class SongScreen(Screen[bool]):
                     Text.from_markup(self.song.format_title(romaji_first=self.romaji_first) or ""), id="title"
                 ),
                 ScrollableLabel(
-                    Text.from_markup(self.song.format_artists(romaji_first=self.romaji_first) or ""), id="artist"
+                    *[Text.from_markup(artist) for artist in a]
+                    if (a := self.song.format_artists_list(romaji_first=self.romaji_first)) is not None
+                    else [],
+                    id="artist",
                 ),
             )
             yield Container(
@@ -232,7 +246,6 @@ class SongScreen(Screen[bool]):
     async def on_scrollable_label_clicked(self, event: ScrollableLabel.Clicked) -> None:  # noqa: PLR0911
         container_id = event.widget.id
         client = ListenClient.get_instance()
-        romaji_first = Config.get_config().display.romaji_first
         if not container_id:
             return
         match container_id:
@@ -240,25 +253,18 @@ class SongScreen(Screen[bool]):
                 if not self.song.artists:
                     return
                 if len(self.song.artists) == 1:
-                    self.notify_fetch(self.song.format_artists(romaji_first=self.romaji_first) or "")
                     artist = await client.artist(self.song.artists[0].id)
                     if not artist:
                         return
                     self.app.push_screen(ArtistScreen(artist, self.player))
                 else:
-                    options = self.song.format_artists_list(romaji_first=romaji_first)
-                    if not options:
-                        return
-                    result = await self.app.push_screen(SelectionScreen(options), wait_for_dismiss=True)
-                    if result is not None:
-                        artist = await client.artist(self.song.artists[result].id)
-                        if not artist:
-                            return
-                        self.app.push_screen(ArtistScreen(artist, self.player))
+                    artist = await client.artist(self.song.artists[event.index].id)
+                    if not artist:
+                        raise Exception("Cannot be no artist")
+                    self.app.push_screen(ArtistScreen(artist, self.player))
             case "album":
                 if not self.song.album:
                     return
-                self.notify_fetch(self.song.album.format_name(romaji_first=self.romaji_first) or "")
                 album = await client.album(self.song.album.id)
                 if not album:
                     return
@@ -266,7 +272,6 @@ class SongScreen(Screen[bool]):
             case "source":
                 if not self.song.source:
                     return
-                self.notify_fetch(self.song.source.format_name(romaji_first=self.romaji_first) or "")
                 source = await client.source(self.song.source.id)
                 if not source:
                     return
@@ -274,11 +279,11 @@ class SongScreen(Screen[bool]):
             case _:
                 return
 
-    def notify_fetch(self, msg: str) -> None:
-        self.notify(f"Fetching data for {msg}...")
-
     def on_mount(self) -> None:
         self.query_one("#favorite", ToggleButton).set_toggle_state(self.is_favorited)
+
+    def on_click(self, events: events.Click) -> None:
+        self.log.debug(Pretty(self.query_one("#artist", ScrollableLabel)))
 
     def action_cancel(self) -> None:
         self.player.terminate_preview()
@@ -327,13 +332,6 @@ class SongScreen(Screen[bool]):
             self.notify("All requests have been used up for today!", severity="warning")
         else:
             self.notify("Song is already in queue", severity="warning")
-
-    # def on_mount(self) -> None:
-    #     self.notify(f"{self.song.format_title()}")
-    #     for widget in [self, *self.query("*")]:
-    #         widget.tooltip = "\n".join(
-    #             f"{node!r}" for node in widget.ancestors_with_self
-    #         )  # + "\n\n" + widget.styles.css
 
 
 class OptionButton(Button):
@@ -430,30 +428,6 @@ class SelectionScreen(ModalScreen[int | None]):
     def clamp(self, text: str) -> str:
         min_len = 24
         return text if len(text) <= min_len else text[: min_len - 1] + "…"
-
-
-if __name__ == "__main__":
-    from textual import work
-    from textual.app import App
-    from textual.widgets import Footer
-
-    class TestApp(App[None]):
-        BINDINGS = [("q", "options", "Options")]  # noqa: RUF012
-
-        def compose(self) -> ComposeResult:
-            yield Label()
-            yield Footer()
-
-        @work
-        async def action_options(self) -> None:
-            options = ["option 1", "option 2", "option 3", "option 4", "this option is too long to be displayed 5"]
-            result = await self.push_screen(SelectionScreen(options), wait_for_dismiss=True)
-            if result is not None:
-                self.query_one(Label).update(f"{options[result]}")
-                self.notify(f"{options[result]}")
-
-    app = TestApp()
-    app.run()
 
 
 class ArtistButton(Button):

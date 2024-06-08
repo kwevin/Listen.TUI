@@ -52,7 +52,7 @@ class SongContainer(Widget):
 
     def compose(self) -> ComposeResult:
         yield ScrollableLabel(id="artist")
-        yield ScrollableLabel(id="title")
+        yield ScrollableLabel(id="title", sep=" ")
 
     async def on_scrollable_label_clicked(self, event: ScrollableLabel.Clicked) -> None:
         if not self.song:
@@ -63,19 +63,22 @@ class SongContainer(Widget):
             if not self.song.artists:
                 return
             artist_id = self.song.artists[event.index].id
+            self.notify(f"Fetching data for {event.content.plain}...")
             artist = await client.artist(artist_id)
             if not artist:
                 return
             self.app.push_screen(ArtistScreen(artist, player))
         elif event.widget.id == "title":
-            if event.index == 1:
-                if not self.song.source:
-                    return
-                source_id = self.song.source.id
-                source = await client.source(source_id)
-                if not source:
-                    return
-                self.app.push_screen(SourceScreen(source, player))
+            if event.index != 1:
+                return
+            if not self.song.source:
+                return
+            source_id = self.song.source.id
+            self.notify(f"Fetching data for {event.content.plain}...")
+            source = await client.source(source_id)
+            if not source:
+                return
+            self.app.push_screen(SourceScreen(source, player))
 
     def set_tooltips(self, string: str | None) -> None:
         self.query_one("#title", ScrollableLabel).tooltip = string

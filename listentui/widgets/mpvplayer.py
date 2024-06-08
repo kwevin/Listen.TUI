@@ -180,7 +180,13 @@ class MPVStreamPlayer(Widget):
         def check(event: mpv.MpvEvent):  # type: ignore
             if isinstance(event.data, mpv.MpvEventEndFile) and event.data.reason == mpv.MpvEventEndFile.ERROR:
                 self.app.call_from_thread(on_error)
-                self.pv_player.terminate()  # type: ignore
+                self.pv_player.wait_for_shutdown()  # type: ignore
+
+        # def parse_data(_: Any, nv: Any) -> None:
+        #     self.log.debug(nv)
+
+        # self.pv_player.observe_property("metadata", parse_data)
+        # self.pv_player.observe_property("duration", parse_data)
 
         try:
             self.pv_player.play(final_url)
