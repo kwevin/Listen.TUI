@@ -707,3 +707,18 @@ class ConfirmScreen(ModalScreen[bool]):
     @on(Button.Pressed, "#cancel")
     def action_cancel(self) -> None:
         self.dismiss(False)
+
+
+class TestScreen(ModalScreen[None]):
+    DEFAULT_CSS = """
+    TestScreen {
+        align: center middle;
+        background: $background;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield ScrollableLabel(Text("test"), Text("even more test"))
+
+    def on_click(self, event: events.Click) -> None:
+        self.dismiss()
