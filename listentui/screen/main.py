@@ -1,8 +1,12 @@
+from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.events import Key
 from textual.reactive import var
-from textual.screen import Screen
+from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Placeholder, TabbedContent, TabPane
+
+from listentui.widgets.custom import ScrollableLabel
 
 from ..data.config import Config
 from ..data.theme import Theme
@@ -37,22 +41,24 @@ class Main(Screen[None]):
         return value
 
     def compose(self) -> ComposeResult:
-        with TabbedContent():
-            with TabPane("Home", id="home"):
-                yield PlayerPage()
-            with TabPane("Search", id="search"):
-                yield SearchPage()
-            with TabPane("History", id="history"):
-                yield HistoryPage()
-            with TabPane("Download", id="download"):
-                yield Placeholder()
-            with TabPane("User", id="user"):
-                yield UserPage()
-            with TabPane("Setting", id="setting"):
-                yield SettingPage()
+        # with TabbedContent():
+        #     with TabPane("Home", id="home"):
+        #         yield PlayerPage()
+        #     with TabPane("Search", id="search"):
+        #         yield SearchPage()
+        #     with TabPane("History", id="history"):
+        #         yield HistoryPage()
+        #     with TabPane("Download", id="download"):
+        #         yield Placeholder()
+        #     with TabPane("User", id="user"):
+        #         yield UserPage()
+        #     with TabPane("Setting", id="setting"):
+        #         yield SettingPage()
         yield Footer()
 
     def on_mount(self) -> None:
+        self.app.push_screen(TestScreen())
+        return
         self.logging = Config.get_config().advance.show_debug_tool
         if self.logging:
             self.content.insert(len(self.content) - 1, "log")
@@ -78,3 +84,18 @@ class Main(Screen[None]):
         artist = event.data.song.format_artists(romaji_first=romaji_first)
         self.notify(f"{title}" + f" by [{Theme.ACCENT}]{artist}[/]" if artist else "", title="Now Playing")
         self.query_one(HistoryPage).update_one()
+
+
+class TestScreen(ModalScreen[None]):
+    DEFAULT_CSS = """
+    TestScreen {
+        align: center middle;
+        background: $background;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield ScrollableLabel(Text("test"), Text("even more test"))
+
+    def on_click(self, event: events.Click) -> None:
+        self.dismiss()
