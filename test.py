@@ -352,7 +352,7 @@ class ScrollableLabel(Widget):
         self._unscroll_timer.resume()
 
 
-class SongScreen(Screen[bool]):
+class SongScreen(ModalScreen[bool]):
     """Screen for displaying Song details"""
 
     DEFAULT_CSS = """
@@ -437,41 +437,34 @@ class SongScreen(Screen[bool]):
                 yield Button("Favorite", id="favorite")
                 yield Button("Request", id="request")
 
-    async def on_scrollable_label_clicked(self, event: ScrollableLabel.Clicked) -> None:  # noqa: PLR0911
+    async def on_scrollable_label_clicked(self, event: ScrollableLabel.Clicked) -> None:
         container_id = event.widget.id
-        client = ListenClient.get_instance()
         if not container_id:
             return
         match container_id:
             case "artist":
-                if not self.song.artists:
-                    return
-                if len(self.song.artists) == 1:
-                    artist = await client.artist(self.song.artists[0].id)
-                    if not artist:
-                        return
-                    self.notify("Pushing artist screen")
-                else:
-                    artist = await client.artist(self.song.artists[event.index].id)
-                    if not artist:
-                        raise Exception("Cannot be no artist")
-                    self.notify("Pushing artist screen")
+                self.notify("Pushing artist screen")
             case "album":
-                if not self.song.album:
-                    return
-                album = await client.album(self.song.album.id)
-                if not album:
-                    return
                 self.notify("Pushing album screen")
             case "source":
-                if not self.song.source:
-                    return
-                source = await client.source(self.song.source.id)
-                if not source:
-                    return
                 self.notify("Pushing source screen")
             case _:
                 return
+
+
+class TestScreen(Screen[None]):
+    def compose(self) -> ComposeResult:
+        yield DataTable()
+
+    def on_mount(self) -> None:
+        self.query_one(DataTable).add_column("")  # type: ignore
+        self.query_one(DataTable).add_row("Click Me!")  # type: ignore
+
+    @work
+    async def on_data_table_cell_selected(self, event: DataTable.CellSelected):
+        client = ListenClient.get_instance()
+        song = await client.song(14949)
+        await self.app.push_screen(SongScreen(song), wait_for_dismiss=True)
 
 
 if __name__ == "__main__":
@@ -481,14 +474,8 @@ if __name__ == "__main__":
         DEFAULT_CSS = """
         """
 
-        def compose(self) -> ComposeResult:
-            yield Label("Click!")
-
-        @work
-        async def on_click(self) -> None:
-            client = ListenClient.get_instance()
-            song = await client.song(14949)
-            await self.push_screen_wait(SongScreen(song))
+        def on_mount(self) -> None:
+            self.push_screen(TestScreen())
 
     app = MyApp()
     app.run()
