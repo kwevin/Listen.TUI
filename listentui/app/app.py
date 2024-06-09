@@ -1,11 +1,11 @@
 from textual import on, work
 from textual.app import App
 
-from ..data import Config
-from ..listen import ListenClient
-from ..screen import Main
-from ..utilities import create_logger
-from ..widgets import SettingPage
+from listentui.data import Config
+from listentui.listen import ListenClient
+from listentui.screen import Main
+from listentui.utilities import create_logger
+from listentui.widgets import SettingPage
 
 
 class ListentuiApp(App[None]):

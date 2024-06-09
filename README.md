@@ -1,12 +1,1 @@
-# LISTEN.tui
-
-# Core
-
-- [] Interface
-- [] Websocket
-- [] Player
-- [] Client
-
-# Features
-
-- [] Stuffs
+# README GOES HERE

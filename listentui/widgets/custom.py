@@ -13,9 +13,8 @@ from textual.reactive import reactive, var
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Label, ListItem, ListView, ProgressBar, Static
 
-from ..data import Config, Theme
-from ..listen import ListenClient
-from ..listen.types import Song
+from listentui.data import Config, Theme
+from listentui.listen import ListenClient, Song
 
 
 class TextRange:
@@ -175,7 +174,8 @@ class ScrollableLabel(Widget):
             return
         text_range = self._get_range_from_offset(self._mouse_pos)
         if not text_range:
-            self._remove_underline()
+            if self._current_highlighted != TextRange(-1, -1):
+                self._remove_underline()
             return
         if self._current_highlighted == text_range and not forced:
             return
@@ -282,8 +282,10 @@ class ScrollableLabel(Widget):
     def _on_leave(self, event: events.Leave) -> None:
         self.log.debug("event: _on_leave")
         self._mouse_pos = -1
-        self._current_highlighted = TextRange(-1, -1)
-        self._remove_underline()
+
+        if self._current_highlighted != TextRange(-1, -1):
+            self._current_highlighted = TextRange(-1, -1)
+            self._remove_underline()
 
         if self._max_scroll == -1:
             return
@@ -291,7 +293,7 @@ class ScrollableLabel(Widget):
             return
         if self._can_scroll:
             self.reset()
-        self._offset = self._offset
+        # self._offset = self._offset
 
     def _on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
         if self._max_scroll == -1:

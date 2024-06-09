@@ -13,10 +13,10 @@ from textual.validation import Function, Validator
 from textual.widget import Widget
 from textual.widgets import Collapsible, Input, Label, Static, Switch, TextArea
 
-from ..data.config import Config
-from ..listen.client import ListenClient
-from .base import BasePage
-from .custom import StaticButton as Button
+from listentui.data import Config
+from listentui.listen import ListenClient
+from listentui.widgets.base import BasePage
+from listentui.widgets.custom import StaticButton as Button
 
 DOC: dict[str, str] = {
     "client.username": "Your login username",

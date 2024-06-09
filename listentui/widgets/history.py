@@ -9,14 +9,19 @@ from textual.coordinate import Coordinate
 from textual.reactive import var
 from textual.widgets import Label
 
-from ..data.config import Config
-from ..data.theme import Theme
-from ..listen.client import ListenClient
-from ..listen.types import PlayStatistics, SongID
-from ..screen.modal import AlbumScreen, ArtistScreen, ConfirmScreen, SelectionScreen, SongScreen, SourceScreen
-from .base import BasePage
-from .custom import ExtendedDataTable as DataTable
-from .mpvplayer import MPVStreamPlayer
+from listentui.data import Config, Theme
+from listentui.listen import ListenClient, PlayStatistics, SongID
+from listentui.screen.modal import (
+    AlbumScreen,
+    ArtistScreen,
+    ConfirmScreen,
+    SelectionScreen,
+    SongScreen,
+    SourceScreen,
+)
+from listentui.widgets.base import BasePage
+from listentui.widgets.custom import ExtendedDataTable as DataTable
+from listentui.widgets.mpvplayer import MPVStreamPlayer
 
 
 class HistoryPage(BasePage):
@@ -46,7 +51,8 @@ class HistoryPage(BasePage):
         yield DataTable()
 
     def on_focus(self) -> None:
-        self.query_one(DataTable).focus()
+        pass
+        # self.query_one(DataTable).focus()
 
     def search_song(self, song_id: SongID | int) -> PlayStatistics:
         return self.history_result[SongID(song_id)]
@@ -84,7 +90,7 @@ class HistoryPage(BasePage):
         data_table.refresh(layout=True)
 
     @work(group="table")
-    async def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
+    async def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:  # noqa: PLR0911, PLR0914
         data_table = self.query_one(DataTable)
         column = event.coordinate.column
         id_coord = Coordinate(event.coordinate.row, 0)

@@ -14,7 +14,7 @@ from gql.transport.aiohttp import AIOHTTPTransport
 from gql.transport.exceptions import TransportQueryError
 from graphql import DocumentNode
 
-from .types import (
+from listentui.listen.types import (
     Album,
     AlbumID,
     Artist,
@@ -442,7 +442,7 @@ class ListenClient:
     @classmethod
     def get_instance(cls) -> Self:
         """return the current instance of ListenClient, will create a new instance if one does not exist"""
-        return cls._client_instance if cls._client_instance else cls()
+        return cls._client_instance or cls()
 
     async def connect(self) -> None:
         self.session = self._client.connect_async(reconnecting=True)  # pyright: ignore
@@ -681,12 +681,10 @@ class ListenClient:
         return [Song.from_data(song) for song in songs]
 
     @overload
-    async def check_favorite(self, song_ids: list[Union[SongID, int]]) -> dict[SongID, bool]:
-        ...
+    async def check_favorite(self, song_ids: list[Union[SongID, int]]) -> dict[SongID, bool]: ...
 
     @overload
-    async def check_favorite(self, song_id: Union[SongID, int]) -> bool:
-        ...
+    async def check_favorite(self, song_id: Union[SongID, int]) -> bool: ...
 
     @requires_auth
     async def check_favorite(self, song_id: Union[SongID, int] | list[Union[SongID, int]]) -> bool | dict[SongID, bool]:

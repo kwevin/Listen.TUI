@@ -8,13 +8,13 @@ from textual.reactive import reactive, var
 from textual.widget import Widget
 from textual.widgets import Button, Label, Static
 
-from ..data import Config, Theme
-from ..listen import Event, Requester
-from ..listen.client import ListenClient
-from .base import BasePage
-from .custom import ToggleButton
-from .mpvplayer import MPVStreamPlayer
-from .websocket import ListenWebsocket, SongContainer
+from listentui.data import Config, Theme
+from listentui.listen import Event, Requester
+from listentui.listen.client import ListenClient
+from listentui.widgets.base import BasePage
+from listentui.widgets.custom import ToggleButton
+from listentui.widgets.mpvplayer import MPVStreamPlayer
+from listentui.widgets.websocket import ListenWebsocket, SongContainer
 
 
 class VanityBar(Widget):

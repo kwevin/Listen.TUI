@@ -8,8 +8,8 @@ import tomli
 import tomli_w
 from xdg import xdg_config_home
 
-from .. import __portable__
-from ..utilities.constant import PACKAGE_NAME
+from listentui import __portable__
+from listentui.utilities.constant import PACKAGE_NAME
 
 
 class InvalidConfigError(Exception):

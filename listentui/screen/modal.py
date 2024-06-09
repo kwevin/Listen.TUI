@@ -9,16 +9,16 @@ from textual.app import ComposeResult
 from textual.binding import BindingType
 from textual.containers import Center, Container, Grid, Horizontal, VerticalScroll
 from textual.message import Message
-from textual.screen import ModalScreen, Screen
+from textual.screen import ModalScreen
 from textual.widgets import Button, Collapsible, Label, ListView, Markdown
 
-from ..data import Config
-from ..data.theme import Theme
-from ..listen import ListenClient
-from ..listen.client import RequestError
-from ..listen.types import Album, AlbumID, Artist, ArtistID, Song, Source
-from ..utilities import format_time_since
-from ..widgets.custom import (
+from listentui.data import Config
+from listentui.data.theme import Theme
+from listentui.listen import ListenClient
+from listentui.listen.client import RequestError
+from listentui.listen.types import Album, AlbumID, Artist, ArtistID, Song, Source
+from listentui.utilities import format_time_since
+from listentui.widgets.custom import (
     DurationProgressBar,
     ExtendedListView,
     ScrollableLabel,
@@ -26,7 +26,7 @@ from ..widgets.custom import (
     StaticButton,
     ToggleButton,
 )
-from ..widgets.mpvplayer import MPVStreamPlayer
+from listentui.widgets.mpvplayer import MPVStreamPlayer
 
 
 class SourceScreen(ModalScreen[None]):
@@ -150,7 +150,7 @@ class SourceScreen(ModalScreen[None]):
         self.dismiss()
 
 
-class SongScreen(Screen[bool]):
+class SongScreen(ModalScreen[bool]):
     """Screen for confirming actions"""
 
     DEFAULT_CSS = f"""
@@ -707,3 +707,18 @@ class ConfirmScreen(ModalScreen[bool]):
     @on(Button.Pressed, "#cancel")
     def action_cancel(self) -> None:
         self.dismiss(False)
+
+
+class TestScreen(ModalScreen[None]):
+    DEFAULT_CSS = """
+    TestScreen {
+        align: center middle;
+        background: $background;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield ScrollableLabel(Text("test"), Text("even more test"))
+
+    def on_click(self, event: events.Click) -> None:
+        self.dismiss()

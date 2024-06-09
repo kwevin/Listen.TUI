@@ -5,7 +5,7 @@ from textual.containers import Horizontal
 from textual.widget import Widget
 from textual.widgets import Button, Static
 
-from ..data import Theme
+from listentui.data import Theme
 
 
 class NavButton(Button):

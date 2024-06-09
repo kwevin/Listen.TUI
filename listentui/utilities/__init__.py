@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from .logger import RichLogExtended, create_logger, get_logger
+from listentui.utilities.logger import RichLogExtended, create_logger, get_logger
 
 __all__ = ["RichLogExtended", "create_logger", "format_time_since", "get_logger"]
 

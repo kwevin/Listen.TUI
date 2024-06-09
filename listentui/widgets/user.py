@@ -11,14 +11,12 @@ from textual.reactive import reactive, var
 from textual.widget import Widget
 from textual.widgets import Label, ListItem, ListView, Markdown
 
-from ..data.config import Config
-from ..data.theme import Theme
-from ..listen.client import ListenClient
-from ..listen.types import CurrentUser, Song, SystemFeed
-from ..screen.modal import SongScreen
-from ..utilities import format_time_since
-from .base import BasePage
-from .mpvplayer import MPVStreamPlayer
+from listentui.data import Config, Theme
+from listentui.listen import CurrentUser, ListenClient, Song, SystemFeed
+from listentui.screen.modal import SongScreen
+from listentui.utilities import format_time_since
+from listentui.widgets.base import BasePage
+from listentui.widgets.mpvplayer import MPVStreamPlayer
 
 
 class FeedItem(ListItem):

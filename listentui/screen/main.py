@@ -1,14 +1,15 @@
+from textual import work
 from textual.app import ComposeResult
 from textual.events import Key
 from textual.reactive import var
 from textual.screen import Screen
 from textual.widgets import Footer, Placeholder, TabbedContent, TabPane
 
-from ..data.config import Config
-from ..data.theme import Theme
-from ..utilities import RichLogExtended
-from ..widgets import HistoryPage, ListenWebsocket, PlayerPage, SearchPage, SettingPage
-from ..widgets.user import UserPage
+from listentui.data.config import Config
+from listentui.data.theme import Theme
+from listentui.utilities import RichLogExtended
+from listentui.widgets import HistoryPage, ListenWebsocket, PlayerPage, SearchPage, SettingPage
+from listentui.widgets.user import UserPage
 
 
 class Main(Screen[None]):
@@ -52,7 +53,8 @@ class Main(Screen[None]):
                 yield SettingPage()
         yield Footer()
 
-    def on_mount(self) -> None:
+    @work
+    async def on_mount(self) -> None:
         self.logging = Config.get_config().advance.show_debug_tool
         if self.logging:
             self.content.insert(len(self.content) - 1, "log")

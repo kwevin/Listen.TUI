@@ -12,15 +12,14 @@ from textual.reactive import var
 from textual.validation import Function
 from textual.widgets import Input, Select
 
-from ..data.config import Config
-from ..data.theme import Theme
-from ..listen.client import ListenClient, RequestError
-from ..listen.types import Song, SongID
-from ..screen.modal import AlbumScreen, ArtistScreen, ConfirmScreen, SelectionScreen, SongScreen, SourceScreen
-from .base import BasePage
-from .custom import ExtendedDataTable as DataTable
-from .custom import StaticButton, ToggleButton
-from .mpvplayer import MPVStreamPlayer
+from listentui.data import Config, Theme
+from listentui.listen.client import ListenClient, RequestError
+from listentui.listen.types import Song, SongID
+from listentui.screen import AlbumScreen, ArtistScreen, ConfirmScreen, SelectionScreen, SongScreen, SourceScreen
+from listentui.widgets.base import BasePage
+from listentui.widgets.custom import ExtendedDataTable as DataTable
+from listentui.widgets.custom import StaticButton, ToggleButton
+from listentui.widgets.mpvplayer import MPVStreamPlayer
 
 
 class FavoriteButton(ToggleButton):
