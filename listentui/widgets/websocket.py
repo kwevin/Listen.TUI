@@ -15,12 +15,13 @@ from textual.reactive import reactive
 from textual.widget import Widget
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
-from listentui.data import Config, Theme
+from listentui.data.config import Config
+from listentui.data.theme import Theme
 from listentui.listen import ListenClient
 from listentui.listen.types import ListenWsData, Song
+from listentui.pages.mpvplayer import MPVStreamPlayer
 from listentui.screen.modal import ArtistScreen, SourceScreen
 from listentui.widgets.custom import DurationProgressBar, ScrollableLabel
-from listentui.widgets.mpvplayer import MPVStreamPlayer
 
 
 class SongContainer(Widget):

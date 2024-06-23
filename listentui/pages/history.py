@@ -9,8 +9,11 @@ from textual.coordinate import Coordinate
 from textual.reactive import var
 from textual.widgets import Label
 
-from listentui.data import Config, Theme
+from listentui.data.config import Config
+from listentui.data.theme import Theme
 from listentui.listen import ListenClient, PlayStatistics, SongID
+from listentui.pages.base import BasePage
+from listentui.pages.mpvplayer import MPVStreamPlayer
 from listentui.screen.modal import (
     AlbumScreen,
     ArtistScreen,
@@ -19,9 +22,7 @@ from listentui.screen.modal import (
     SongScreen,
     SourceScreen,
 )
-from listentui.widgets.base import BasePage
 from listentui.widgets.custom import ExtendedDataTable as DataTable
-from listentui.widgets.mpvplayer import MPVStreamPlayer
 
 
 class HistoryPage(BasePage):

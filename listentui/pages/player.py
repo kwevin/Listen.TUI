@@ -8,12 +8,13 @@ from textual.reactive import reactive, var
 from textual.widget import Widget
 from textual.widgets import Button, Label, Static
 
-from listentui.data import Config, Theme
+from listentui.data.config import Config
+from listentui.data.theme import Theme
 from listentui.listen import Event, Requester
 from listentui.listen.client import ListenClient
-from listentui.widgets.base import BasePage
+from listentui.pages.base import BasePage
+from listentui.pages.mpvplayer import MPVStreamPlayer
 from listentui.widgets.custom import ToggleButton
-from listentui.widgets.mpvplayer import MPVStreamPlayer
 from listentui.widgets.websocket import ListenWebsocket, SongContainer
 
 

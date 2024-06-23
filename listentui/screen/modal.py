@@ -12,11 +12,12 @@ from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, Collapsible, Label, ListView, Markdown
 
-from listentui.data import Config
+from listentui.data.config import Config
 from listentui.data.theme import Theme
 from listentui.listen import ListenClient
 from listentui.listen.client import RequestError
 from listentui.listen.types import Album, AlbumID, Artist, ArtistID, Song, Source
+from listentui.pages.mpvplayer import MPVStreamPlayer
 from listentui.utilities import format_time_since
 from listentui.widgets.custom import (
     DurationProgressBar,
@@ -26,7 +27,6 @@ from listentui.widgets.custom import (
     StaticButton,
     ToggleButton,
 )
-from listentui.widgets.mpvplayer import MPVStreamPlayer
 
 
 class SourceScreen(ModalScreen[None]):

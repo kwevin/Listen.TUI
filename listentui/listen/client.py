@@ -2,7 +2,6 @@ import json
 import time
 from base64 import b64decode
 from dataclasses import dataclass
-from datetime import datetime
 from enum import Enum
 from functools import wraps
 from string import Template
@@ -22,15 +21,11 @@ from listentui.listen.types import (
     Character,
     CharacterID,
     CurrentUser,
-    Image,
     PlayStatistics,
-    Requester,
-    Socials,
     Song,
     SongID,
     Source,
     SourceID,
-    SystemFeed,
     User,
 )
 
@@ -102,9 +97,7 @@ class ListenClient:
     @staticmethod
     def validate_token(token: str) -> bool:
         jwt_payload: dict[str, Any] = json.loads(b64decode(token.split(".")[1] + "=="))
-        if time.time() >= jwt_payload["exp"]:
-            return False
-        return True
+        return not time.time() >= jwt_payload["exp"]
 
     @staticmethod
     def _build_queries():
@@ -424,20 +417,7 @@ class ListenClient:
             token: str = res["login"]["token"]
 
         await client.close_async()
-        return cls(
-            CurrentUser(
-                uuid=user["uuid"],
-                username=user["username"],
-                display_name=user["displayName"],
-                bio=CurrentUser.convert_to_markdown(user["bio"]) if user["bio"] else None,
-                favorites=user["favorites"]["count"],
-                uploads=user["uploads"]["count"],
-                requests=user["requests"]["count"],
-                feeds=[SystemFeed.from_data(feed) for feed in user["systemFeed"]],
-                token=token,
-                password=password,
-            )
-        )
+        return cls(CurrentUser.from_data_with_password(user, token, password))
 
     @classmethod
     def get_instance(cls) -> Self:
@@ -517,33 +497,7 @@ class ListenClient:
         album = res.get("album", None)
         if not album:
             return None
-        return Album(
-            id=album["id"],
-            name=album["name"],
-            name_romaji=album["nameRomaji"],
-            image=Image.from_source("albums", album["image"]),
-            songs=[Song.from_data(song) for song in album["songs"]],
-            artists=[
-                Artist(
-                    id=artist["id"],
-                    name=artist["name"],
-                    name_romaji=artist["nameRomaji"],
-                    image=Image.from_source("artists", artist["image"]),
-                    characters=[
-                        Character(
-                            id=character["id"],
-                            name=character["name"],
-                            name_romaji=character["nameRomaji"],
-                        )
-                        for character in artist["characters"]
-                    ],
-                )
-                for artist in album["artists"]
-            ],
-            socials=[Socials(name=social["name"], url=social["url"]) for social in album["links"]]
-            if album["links"]
-            else None,
-        )
+        return Album.from_data(album)
 
     async def artist(self, artist_id: Union[ArtistID, int]) -> Artist | None:
         """return an artist from the api"""
@@ -553,34 +507,7 @@ class ListenClient:
         artist = res.get("artist", None)
         if not artist:
             return None
-        return Artist(
-            id=artist["id"],
-            name=artist["name"],
-            name_romaji=artist["nameRomaji"],
-            image=Image.from_source("artists", artist["image"]),
-            characters=[Character(character["id"]) for character in artist["characters"]]
-            if len(artist["characters"]) != 0
-            else None,
-            socials=[Socials(name=social["name"], url=social["url"]) for social in artist["links"]]
-            if artist["links"]
-            else None,
-            album_count=len(artist["albums"]) if artist["albums"] else None,
-            albums=[
-                Album(
-                    id=album["id"],
-                    name=album["name"],
-                    name_romaji=album["nameRomaji"],
-                    image=Image.from_source("albums", album["image"]),
-                    songs=[Song.from_data(song) for song in album["songs"]],
-                )
-                for album in artist["albums"]
-            ]
-            if len(artist["albums"]) != 0
-            else None,
-            songs_without_album=[Song.from_data(song) for song in artist["songsWithoutAlbum"]]
-            if len(artist["songsWithoutAlbum"]) != 0
-            else None,
-        )
+        return Artist.from_data(artist)
 
     async def character(self, character_id: Union[CharacterID, int]) -> Character | None:
         """return a character from the api"""
@@ -590,7 +517,7 @@ class ListenClient:
         character = res.get("character", None)
         if not character:
             return None
-        return Character(id=character["id"], name=character["name"], name_romaji=character["nameRomaji"])
+        return Character.from_data(character)
 
     async def song(self, song_id: Union[SongID, int]) -> Song | None:
         """return a song from the api"""
@@ -620,20 +547,7 @@ class ListenClient:
         source = res.get("source", None)
         if not source:
             return None
-        return Source(
-            id=source["id"],
-            name=source["name"],
-            name_romaji=source["nameRomaji"],
-            image=Image.from_source("sources", source["image"]),
-            description=source["description"] if source["description"] else None,
-            socials=[Socials(name=social["name"], url=social["url"]) for social in source["links"]]
-            if source["links"]
-            else None,
-            songs=[Song.from_data(song) for song in source["songs"]] if source["songs"] else None,
-            songs_without_album=[Song.from_data(song) for song in source["songsWithoutAlbum"]]
-            if len(source["songsWithoutAlbum"]) != 0
-            else None,
-        )
+        return Source.from_data(source)
 
     async def user(self, username: str, system_offset: int = 0, system_count: int = 5) -> User | None:
         """return a user from the api"""
@@ -643,16 +557,7 @@ class ListenClient:
         user = res.get("user", None)
         if not user:
             return None
-        return User(
-            uuid=user["uuid"],
-            username=user["username"],
-            display_name=user["displayName"],
-            bio=User.convert_to_markdown(user["bio"]) if user["bio"] else None,
-            favorites=user["favorites"]["count"],
-            uploads=user["uploads"]["count"],
-            requests=user["requests"]["count"],
-            feeds=[SystemFeed.from_data(feed) for feed in user["systemFeed"]],
-        )
+        return User.from_data(user)
 
     async def history(self, count: Optional[int] = 50, offset: Optional[int] = 0) -> list[PlayStatistics]:
         """return a list of songs history from the api"""
@@ -660,14 +565,7 @@ class ListenClient:
         params = {"count": count, "offset": offset}
         res = await self._execute(document=query, variable_values=params)
         songs = res["playStatistics"]["songs"]
-        return [
-            PlayStatistics(
-                created_at=datetime.fromtimestamp(round(int(song["createdAt"]) / 1000)),
-                song=Song.from_data(song["song"]),
-                requester=Requester.from_data(song["requester"]) if song["requester"] else None,
-            )
-            for song in songs
-        ]
+        return [PlayStatistics.from_data(song) for song in songs]
 
     async def search(self, term: str, count: Optional[int] = None, favorite_only: Optional[bool] = False) -> list[Song]:
         """search for a song from the api"""
@@ -681,10 +579,12 @@ class ListenClient:
         return [Song.from_data(song) for song in songs]
 
     @overload
-    async def check_favorite(self, song_ids: list[Union[SongID, int]]) -> dict[SongID, bool]: ...
+    async def check_favorite(self, song_ids: list[Union[SongID, int]]) -> dict[SongID, bool]:
+        ...
 
     @overload
-    async def check_favorite(self, song_id: Union[SongID, int]) -> bool: ...
+    async def check_favorite(self, song_id: Union[SongID, int]) -> bool:
+        ...
 
     @requires_auth
     async def check_favorite(self, song_id: Union[SongID, int] | list[Union[SongID, int]]) -> bool | dict[SongID, bool]:
@@ -698,9 +598,7 @@ class ListenClient:
         favorite = res["checkFavorite"]
         if isinstance(song_id, list):
             return {SongID(sid): sid in favorite for sid in song_id}
-        if song_id in favorite:
-            return True
-        return False
+        return song_id in favorite
 
     # mutations
     @requires_auth

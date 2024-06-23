@@ -12,14 +12,15 @@ from textual.reactive import var
 from textual.validation import Function
 from textual.widgets import Input, Select
 
-from listentui.data import Config, Theme
+from listentui.data.config import Config
+from listentui.data.theme import Theme
 from listentui.listen.client import ListenClient, RequestError
 from listentui.listen.types import Song, SongID
-from listentui.screen import AlbumScreen, ArtistScreen, ConfirmScreen, SelectionScreen, SongScreen, SourceScreen
-from listentui.widgets.base import BasePage
+from listentui.pages.base import BasePage
+from listentui.pages.mpvplayer import MPVStreamPlayer
+from listentui.screen.modal import AlbumScreen, ArtistScreen, ConfirmScreen, SelectionScreen, SongScreen, SourceScreen
 from listentui.widgets.custom import ExtendedDataTable as DataTable
 from listentui.widgets.custom import StaticButton, ToggleButton
-from listentui.widgets.mpvplayer import MPVStreamPlayer
 
 
 class FavoriteButton(ToggleButton):

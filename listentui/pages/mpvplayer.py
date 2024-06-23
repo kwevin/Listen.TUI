@@ -10,8 +10,8 @@ from textual.reactive import var
 from textual.widget import Widget
 from textual.worker import Worker
 
-from listentui.data import Config
-from listentui.utilities import get_logger
+from listentui.data.config import Config
+from listentui.utilities.logger import get_logger
 
 
 class MPVStreamPlayer(Widget):

@@ -13,7 +13,8 @@ from textual.reactive import reactive, var
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Label, ListItem, ListView, ProgressBar, Static
 
-from listentui.data import Config, Theme
+from listentui.data.config import Config
+from listentui.data.theme import Theme
 from listentui.listen import ListenClient, Song
 
 

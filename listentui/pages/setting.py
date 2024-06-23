@@ -13,9 +13,9 @@ from textual.validation import Function, Validator
 from textual.widget import Widget
 from textual.widgets import Collapsible, Input, Label, Static, Switch, TextArea
 
-from listentui.data import Config
+from listentui.data.config import Config
 from listentui.listen import ListenClient
-from listentui.widgets.base import BasePage
+from listentui.pages.base import BasePage
 from listentui.widgets.custom import StaticButton as Button
 
 DOC: dict[str, str] = {

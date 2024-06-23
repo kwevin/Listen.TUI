@@ -21,6 +21,10 @@ class Socials:
     name: str
     url: str
 
+    @classmethod
+    def from_data(cls: Type[Self], social: dict[str, Any]) -> Self:
+        return cls(name=social["name"], url=social["url"])
+
 
 @dataclass
 class Image:
@@ -61,6 +65,19 @@ class User:
     def __post_init__(self):
         self.link = f"https://listen.moe/u/{self.username}"
 
+    @classmethod
+    def from_data(cls: Type[Self], user: dict[str, Any]) -> Self:
+        return cls(
+            uuid=user["uuid"],
+            username=user["username"],
+            display_name=user["displayName"],
+            bio=User.convert_to_markdown(user["bio"]) if user["bio"] else None,
+            favorites=user["favorites"]["count"],
+            uploads=user["uploads"]["count"],
+            requests=user["requests"]["count"],
+            feeds=[SystemFeed.from_data(feed) for feed in user["systemFeed"]],
+        )
+
     @staticmethod
     def convert_to_markdown(string: str) -> str:
         return markdownify(string)  # type: ignore
@@ -70,6 +87,21 @@ class User:
 class CurrentUser(User):
     token: str
     password: str
+
+    @classmethod
+    def from_data_with_password(cls: Type[Self], user: dict[str, Any], token: str, password: str) -> Self:
+        return cls(
+            uuid=user["uuid"],
+            username=user["username"],
+            display_name=user["displayName"],
+            bio=CurrentUser.convert_to_markdown(user["bio"]) if user["bio"] else None,
+            favorites=user["favorites"]["count"],
+            uploads=user["uploads"]["count"],
+            requests=user["requests"]["count"],
+            feeds=[SystemFeed.from_data(feed) for feed in user["systemFeed"]],
+            token=token,
+            password=password,
+        )
 
 
 @dataclass
@@ -85,6 +117,18 @@ class Album:
 
     def __post_init__(self):
         self.link = f"https://listen.moe/albums/{self.id}"
+
+    @classmethod
+    def from_data(cls: Type[Self], album: dict[str, Any]) -> Self:
+        return cls(
+            id=album["id"],
+            name=album.get("name"),
+            name_romaji=album.get("nameRomaji"),
+            image=Image.from_source("albums", album["image"]) if album.get("image") else None,
+            songs=[Song.from_data(song) for song in album["songs"]] if album.get("songs") else None,
+            artists=[Artist.from_data(artist) for artist in album["artists"]] if album.get("artists") else None,
+            socials=[Socials.from_data(social) for social in album["links"]] if album.get("links") else None,
+        )
 
     def format_name(self, *, romaji_first: bool = True) -> str | None:
         return (self.name_romaji or self.name) if romaji_first else (self.name or self.name_romaji)
@@ -120,6 +164,26 @@ class Artist:
             total += len(self.songs_without_album)
         self.song_count = total
 
+    @classmethod
+    def from_data(cls: Type[Self], artist: dict[str, Any]) -> Self:
+        return cls(
+            id=artist["id"],
+            name=artist.get("name"),
+            name_romaji=artist.get("nameRomaji"),
+            image=Image.from_source("artists", artist["image"]),
+            characters=[Character.from_data(character) for character in artist["characters"]]
+            if artist.get("characters") and len(artist["characters"]) != 0
+            else None,
+            socials=[Socials.from_data(social) for social in artist["links"]] if artist.get("links") else None,
+            album_count=len(artist["albums"]) if artist.get("albums") else None,
+            albums=[Album.from_data(album) for album in artist["albums"]]
+            if artist.get("albums") and len(artist["albums"]) != 0
+            else None,
+            songs_without_album=[Song.from_data(song) for song in artist["songsWithoutAlbum"]]
+            if artist.get("songsWithoutAlbum") and len(artist["songsWithoutAlbum"]) != 0
+            else None,
+        )
+
     def format_name(self, *, romaji_first: bool = True) -> str | None:
         return (self.name_romaji or self.name) if romaji_first else (self.name or self.name_romaji)
 
@@ -139,6 +203,10 @@ class Character:
     def __post_init__(self):
         self.link = f"https://listen.moe/characters/{self.id}"
 
+    @classmethod
+    def from_data(cls: Type[Self], character: dict[str, Any]) -> Self:
+        return cls(id=character["id"], name=character.get("name"), name_romaji=character.get("nameRomaji"))
+
 
 @dataclass
 class Source:
@@ -154,6 +222,21 @@ class Source:
 
     def __post_init__(self):
         self.link = f"https://listen.moe/sources/{self.id}"
+
+    @classmethod
+    def from_data(cls: Type[Self], source: dict[str, Any]) -> Self:
+        return cls(
+            id=source["id"],
+            name=source.get("name"),
+            name_romaji=source.get("nameRomaji"),
+            image=Image.from_source("sources", source["image"]),
+            description=source.get("description"),
+            socials=[Socials.from_data(social) for social in source["links"]] if source.get("links") else None,
+            songs=[Song.from_data(song) for song in source["songs"]] if source.get("songs") else None,
+            songs_without_album=[Song.from_data(song) for song in source["songsWithoutAlbum"]]
+            if source.get("songsWithoutAlbum") and len(source["songsWithoutAlbum"]) != 0
+            else None,
+        )
 
     def format_name(self, *, romaji_first: bool = True) -> str | None:
         return (self.name_romaji or self.name) if romaji_first else (self.name or self.name_romaji)
@@ -208,104 +291,21 @@ class Event:
 class Song:
     @classmethod
     def from_data(cls: Type[Self], data: dict[str, Any]) -> Self:
-        duration = data.get("duration")
-        kwargs = {
-            "id": data["id"],
-            "duration": duration,
-            "time_end": round(time() + duration) if duration else round(time()),
-            "title": Song._get_title(data),
-            "source": Song._get_sources(data),
-            "artists": Song._get_artists(data),
-            "album": Song._get_albums(data),
-            "characters": Song._get_characters(data),
-            "snippet": data.get("snippet"),
-        }
-        if p := data.get("played"):
-            kwargs.update({"played": p})
-        if p := data.get("titleRomaji"):
-            kwargs.update({"title_romaji": p})
-        if p := data.get("lastPlayed"):
-            kwargs.update({"last_played": datetime.fromtimestamp(int(p) / 1000)})
-        if p := data.get("uploader"):
-            kwargs.update({"uploader": Uploader.from_data(p)})
-
-        return cls(**kwargs)  # pyright: ignore
-
-    @staticmethod
-    def _sanitise(word: str) -> str:
-        # TODO: need to see if this affects Textual
-        return word
-        # return word.replace("\u3099", "\u309B").replace("\u309A", "\u309C").replace("\u200b", "")
-
-    @staticmethod
-    def _get_title(song: dict[str, Any]) -> str:
-        title: str = song["title"]
-        return title
-
-    @staticmethod
-    def _get_sources(song: dict[str, Any]) -> Source | None:
-        sources = song.get("sources")
-        if not sources:
-            return None
-        source = sources[0]
-        return Source(
-            id=source["id"],
-            name=Song._sanitise(source["name"]) if source.get("name") else None,
-            name_romaji=source.get("nameRomaji"),
-            image=Image.from_source("sources", source.get("image")),
+        return cls(
+            id=data["id"],
+            title=data["title"],
+            title_romaji=data.get("titleRomaji"),
+            source=Source.from_data(data["sources"][0]) if data.get("sources") else None,
+            artists=[Artist.from_data(artist) for artist in data["artists"]] if data.get("artists") else None,
+            album=Album.from_data(data["albums"][0]) if data.get("albums") else None,
+            characters=[Character.from_data(chara) for chara in data["characters"]] if data.get("characters") else None,
+            duration=data.get("duration"),
+            time_end=round(time() + data["duration"]) if data.get("duration") else round(time()),
+            snippet=data.get("snippet"),
+            played=data.get("played"),
+            last_played=datetime.fromtimestamp(int(date) / 1000) if (date := data.get("lastPlayed")) else None,
+            uploader=Uploader.from_data(data["uploader"]) if data.get("uploader") else None,
         )
-
-    @staticmethod
-    def _get_artists(song: dict[str, Any]) -> list[Artist] | None:
-        artists = song.get("artists")
-        if not artists:
-            return None
-        return [
-            Artist(
-                id=artist["id"],
-                name=Song._sanitise(artist["name"]) if artist.get("name") else None,
-                name_romaji=Song._sanitise(artist["nameRomaji"]) if artist.get("nameRomaji") else None,
-                image=Image.from_source("artists", artist.get("image")),
-                characters=[
-                    Character(
-                        character["id"],
-                        name=Song._sanitise(character["name"]) if character.get("name") else None,
-                        name_romaji=Song._sanitise(character["nameRomaji"]) if character.get("nameRomaji") else None,
-                    )
-                    for character in artist.get("characters")
-                ]
-                if len(artist.get("characters")) != 0
-                else None,
-            )
-            for artist in artists
-        ]
-
-    @staticmethod
-    def _get_albums(song: dict[str, Any]) -> Album | None:
-        albums = song.get("albums")
-        if not albums:
-            return None
-        album = albums[0]
-        return Album(
-            id=album["id"],
-            name=Song._sanitise(album["name"]) if album.get("name") else None,
-            name_romaji=Song._sanitise(album["nameRomaji"]) if album.get("nameRomaji") else None,
-            image=Image.from_source("albums", album.get("image")),
-        )
-
-    @staticmethod
-    def _get_characters(song: dict[str, Any]) -> list[Character] | None:
-        characters = song.get("characters")
-        if not characters:
-            return None
-        return [
-            Character(
-                id=character["id"],
-                name=Song._sanitise(character["name"]) if character.get("name") else None,
-                name_romaji=Song._sanitise(character["nameRomaji"]) if character.get("nameRomaji") else None,
-            )
-            for character in characters
-        ]
 
     def _artist_list(
         self,
@@ -405,9 +405,7 @@ class Song:
 
     def format_title(self, *, romaji_first: bool = True) -> str | None:
         title = (self.title_romaji or self.title) if romaji_first else (self.title or self.title_romaji)
-        if title:
-            return self._sanitise(title)
-        return None
+        return title or None
 
     def album_image(self):
         if not self.album:
@@ -432,10 +430,10 @@ class Song:
     duration: int | None
     time_end: int
     uploader: Uploader | None = None
-    snippet: Optional[str] = None
-    played: Optional[int] = None
-    title_romaji: Optional[str] = None
-    last_played: Optional[datetime] = None
+    snippet: str | None = None
+    played: int | None = None
+    title_romaji: str | None = None
+    last_played: datetime | None = None
 
 
 @dataclass
@@ -471,6 +469,14 @@ class PlayStatistics:
     created_at: datetime
     song: Song
     requester: Requester | None
+
+    @classmethod
+    def from_data(cls: Type[Self], data: dict[str, Any]) -> Self:
+        return cls(
+            created_at=datetime.fromtimestamp(round(int(data["createdAt"]) / 1000)),
+            song=Song.from_data(data["song"]),
+            requester=Requester.from_data(data["requester"]) if data["requester"] else None,
+        )
 
 
 @dataclass

@@ -7,9 +7,13 @@ from textual.widgets import Footer, Placeholder, TabbedContent, TabPane
 
 from listentui.data.config import Config
 from listentui.data.theme import Theme
+from listentui.pages.history import HistoryPage
+from listentui.pages.player import PlayerPage
+from listentui.pages.search import SearchPage
+from listentui.pages.setting import SettingPage
+from listentui.pages.user import UserPage
 from listentui.utilities import RichLogExtended
-from listentui.widgets import HistoryPage, ListenWebsocket, PlayerPage, SearchPage, SettingPage
-from listentui.widgets.user import UserPage
+from listentui.widgets.websocket import ListenWebsocket
 
 
 class Main(Screen[None]):
