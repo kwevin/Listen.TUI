@@ -1,7 +1,6 @@
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false
 import logging
 import sys
-from datetime import datetime
 from logging import Handler, Logger, LogRecord
 from typing import Any, ClassVar
 
@@ -12,13 +11,30 @@ from textual.widgets import RichLog
 
 
 class RichLogExtended(RichLog):
-    BINDINGS: ClassVar[list[BindingType]] = [Binding("c", "clear", "Clear")]
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("c", "clear", "Clear"),
+        Binding("d", "toggle_autoscroll", "Toggle Autoscroll"),
+    ]
+    data: ClassVar[list[str]] = []
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, highlight=True, markup=True, wrap=True, auto_scroll=False, **kwargs)
+        super().__init__(*args, highlight=True, markup=True, wrap=True, **kwargs)
+        for line in self.data:
+            self.write(line, expand=True)
 
     def action_clear(self) -> None:
         self.clear()
+        RichLogExtended.data = []
+
+    def action_toggle_autoscroll(self) -> None:
+        self.auto_scroll = not self.auto_scroll
+        self.scroll_end()
+        self.notify(f"Autoscroll {'enable' if self.auto_scroll else 'disable'}")
+
+    def on_resize(self) -> None:
+        self.clear()
+        for line in self.data:
+            self.write(line, expand=True)
 
 
 class RichLogHandler(Handler):
@@ -32,6 +48,7 @@ class RichLogHandler(Handler):
             app.log.logging(message)
             # write to all RichLogExtended widgets
             try:
+                RichLogExtended.data.append(self.format(record))
                 for widget in app.query(RichLogExtended):
                     widget.write(message)
             except QueryError:
@@ -39,7 +56,7 @@ class RichLogHandler(Handler):
 
 
 def get_logger() -> Logger:
-    return logging.getLogger("ListenTUI")
+    return logging.getLogger("LISTENtui")
 
 
 def create_logger(verbose: bool) -> Logger:
@@ -50,6 +67,4 @@ def create_logger(verbose: bool) -> Logger:
         handlers=[RichLogHandler()],
         datefmt="%H:%M:%S",
     )
-    logger = logging.getLogger("ListenTUI")
-    logger.debug(f"Logging started at: {datetime.now()}")
-    return logger
+    return logging.getLogger("LISTENtui")

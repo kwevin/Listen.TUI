@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import sys
 
-from listentui.app.app import run as run_app
+from listentui.app import run as run_app
 
 if __package__ is None and not getattr(sys, "frozen", False):  # type: ignore
     # direct call of __main__.py

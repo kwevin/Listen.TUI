@@ -1,4 +1,4 @@
-from typing import Any, ClassVar, Iterable, Literal, Tuple
+from typing import Any, ClassVar, Iterable, Optional, Tuple
 
 from rich.cells import cached_cell_len
 from rich.console import RenderableType
@@ -7,7 +7,7 @@ from rich.text import Span, Text
 from textual import events, on
 from textual.app import ComposeResult, RenderResult
 from textual.binding import Binding, BindingType
-from textual.containers import Horizontal
+from textual.containers import Center, Horizontal
 from textual.message import Message
 from textual.reactive import reactive, var
 from textual.widget import Widget
@@ -16,6 +16,7 @@ from textual.widgets import Button, DataTable, Label, ListItem, ListView, Progre
 from listentui.data.config import Config
 from listentui.data.theme import Theme
 from listentui.listen import ListenClient, Song
+from listentui.listen.types import Event, ListenWsData, Requester
 
 
 class TextRange:
@@ -159,9 +160,6 @@ class ScrollableLabel(Widget):
             return
         self._highlight_under_mouse()
 
-    def _watch_text(self, old: Text, new: Text) -> None:
-        self.log.debug(f"{old} ==> {new}")
-
     def _get_range_from_offset(self, offset: int) -> TextRange | None:
         if offset < 0:
             return None
@@ -281,7 +279,6 @@ class ScrollableLabel(Widget):
         self.post_message(self.Clicked(self, content[0], content[1]))
 
     def _on_leave(self, event: events.Leave) -> None:
-        self.log.debug("event: _on_leave")
         self._mouse_pos = -1
 
         if self._current_highlighted != TextRange(-1, -1):
@@ -364,33 +361,32 @@ class _DurationCompleteLabel(Static):
 
 
 class DurationProgressBar(Widget):
-    DEFAULT_CSS = f"""
-    DurationProgressBar {{
+    DEFAULT_CSS = """
+    DurationProgressBar {
+        height: 1;
         width: 1fr;
-    }}
-    DurationProgressBar ProgressBar Bar {{
+    }
+    DurationProgressBar ProgressBar Bar {
         width: 1fr;
-    }}
-    DurationProgressBar ProgressBar {{
+    }
+    DurationProgressBar ProgressBar {
         width: 1fr;
-    }}
-    DurationProgressBar ProgressBar Bar > .bar--indeterminate {{
-        color: {Theme.ACCENT};
-    }}
-    DurationProgressBar ProgressBar Bar > .bar--bar {{
-        color: {Theme.ACCENT};
-    }}
-    DurationProgressBar _DurationCompleteLabel {{
+    }
+    DurationProgressBar ProgressBar Bar > .bar--indeterminate {
+        color: red;
+    }
+    DurationProgressBar ProgressBar Bar > .bar--bar {
+        color: red;
+    }
+    DurationProgressBar _DurationCompleteLabel {
         width: auto;
-        margin: 0 2 0 2;
-    }}
+        margin-left: 2;
+    }
     """
 
     def __init__(self, current: int = 0, total: int = 0, stop: bool = False, pause_on_end: bool = False) -> None:
         super().__init__()
-        self.timer = self.set_interval(1, self._update_progress)
-        if stop:
-            self.timer.pause()
+        self.timer = self.set_interval(1, self._update_progress, pause=stop)
         self.current = current
         self.total = total
         self.pause_on_end = pause_on_end
@@ -457,42 +453,40 @@ class ExtendedDataTable(DataTable[Any]):
 
 
 class StaticButton(Button):
-    DEFAULT_CSS = f"""
-    StaticButton {{
-        background: {Theme.BUTTON_BACKGROUND};
-    }}
+    DEFAULT_CSS = """
+    StaticButton:disabled {
+        tint: black 80%;
+    }
+    StaticButton.hidden {
+        display: none;
+    }
     """
 
     def __init__(
-        self,
-        label: str | Text | None = None,
-        variant: Literal["default", "primary", "success", "warning", "error"] = "default",
-        *,
-        check_user: bool = False,
-        name: str | None = None,
-        id: str | None = None,  # noqa: A002
-        classes: str | None = None,
-        disabled: bool = False,
+        self, label: str | Text | None = None, check_user: bool = False, hidden: bool = False, *args: Any, **kwargs: Any
     ):
-        super().__init__(label, variant, name=name, id=id, classes=classes, disabled=disabled)
+        super().__init__(label, *args, **kwargs)
         self.can_focus = False
         self._check_user = check_user
+        self._hidden = hidden
 
     async def on_mount(self) -> None:
         if self._check_user:
             client = ListenClient.get_instance()
             if not client.logged_in:
                 self.disabled = True
+                if self._hidden:
+                    self.add_class("hidden")
 
 
 class ToggleButton(StaticButton):
-    DEFAULT_CSS = f"""
-    ToggleButton.-toggled {{
-        background: {Theme.ACCENT};
+    DEFAULT_CSS = """
+    ToggleButton.-toggled {
+        background: red;
         text-style: bold reverse;
-    }}
+    }
     """
-    is_toggled: reactive[bool] = reactive(False, init=False, layout=True)
+    is_toggled: var[bool] = var(False, init=False)
 
     class Toggled(Message):
         def __init__(self, state: bool) -> None:
@@ -503,15 +497,12 @@ class ToggleButton(StaticButton):
         self,
         label: str | Text | None = None,
         toggled_label: str | Text | None = None,
-        variant: Literal["default", "primary", "success", "warning", "error"] = "default",
-        *,
         check_user: bool = False,
-        name: str | None = None,
-        id: str | None = None,  # noqa: A002
-        classes: str | None = None,
-        disabled: bool = False,
+        hidden: bool = False,
+        *args: Any,
+        **kwargs: Any,
     ):
-        super().__init__(label, variant, name=name, id=id, classes=classes, disabled=disabled, check_user=check_user)
+        super().__init__(label, check_user, hidden, *args, **kwargs)
         self._default = label
         self._toggled_label = toggled_label
 
@@ -522,7 +513,6 @@ class ToggleButton(StaticButton):
         else:
             self.label = self._default or ""
 
-    @on(Button.Pressed)
     def toggle_state(self) -> None:
         self.is_toggled = not self.is_toggled
         self.post_message(self.Toggled(self.is_toggled))
@@ -602,3 +592,137 @@ class ExtendedListView(ListView):
         if selected_child is None:
             return
         self.post_message(self.SongSelected(selected_child.song))
+
+
+class VanityBar(Widget):
+    DEFAULT_CSS = """
+    VanityBar {
+        width: auto;
+        height: auto;
+        padding-bottom: 1;
+        
+        #listener {
+            height: 1;
+        }
+        
+        #event {
+            height: 1;
+        }
+
+        #requester {
+            height: 1;
+            padding-right: 1;
+        }
+        
+        &> Center {
+            dock: top;
+        }
+        
+        &> Static {
+            width: 1fr;
+            height: 1;
+        }
+
+        &> Horizontal {
+            height: auto;
+        }
+    }
+
+    """
+    listener: reactive[int] = reactive(0, layout=True)
+    requester: reactive[Requester | None] = reactive(None, layout=True)
+    event: reactive[Event | None] = reactive(None, layout=True)
+
+    def watch_listener(self, value: int) -> None:
+        self.query_one("#listener", Label).update(f"{value} Listeners")
+
+    def watch_requester(self, value: Requester | None) -> None:
+        if value:
+            self.query_one("#requester", Label).update(f"Requested by [red]{value.display_name}[/]")
+        else:
+            self.query_one("#requester", Label).update("")
+
+    def watch_event(self, value: Event | None) -> None:
+        if value:
+            self.query_one("#event", Label).update(
+                f"[red]♫♪.ılılıll {value.name} llılılı.♫♪[/]"  # noqa: RUF001
+            )
+        else:
+            self.query_one("#event", Label).update("")
+
+    def compose(self) -> ComposeResult:
+        yield Center(Label("", id="event"))
+        with Horizontal():
+            yield Label("", id="listener")
+            yield Static()
+            yield Label("", id="requester")
+
+    def update_vanity(self, data: ListenWsData) -> None:
+        self.listener = data.listener
+        self.requester = data.requester
+        self.event = data.event
+
+
+class SongContainer(Widget):
+    DEFAULT_CSS = """
+    SongContainer {
+        width: 1fr;
+        height: auto;
+
+        #artist {
+            color: rgb(249, 38, 114);
+        }
+    }
+    """
+    song: reactive[None | Song] = reactive(None, layout=True, init=False)
+
+    def __init__(self, song: Optional[Song] = None) -> None:
+        super().__init__()
+        if song:
+            self.song = song
+
+    def watch_song(self, song: Song) -> None:
+        romaji_first = Config.get_config().display.romaji_first
+        self.artist = song.format_artists_list(romaji_first=romaji_first) or []
+        self.title = song.format_title(romaji_first=romaji_first) or ""
+        self.source = song.format_source(romaji_first=romaji_first)
+        self.query_one("#artist", ScrollableLabel).update(*[Text.from_markup(artist) for artist in self.artist])
+        self.query_one("#title", ScrollableLabel).update(Text.from_markup(f"{self.title}"))
+        if self.source:
+            self.query_one("#title", ScrollableLabel).append(Text.from_markup(f"[cyan]\\[{self.source}][/cyan]"))
+
+    def update_song(self, song: Song) -> None:
+        self.song = song
+
+    def compose(self) -> ComposeResult:
+        yield VanityBar()
+        yield ScrollableLabel(id="artist")
+        yield ScrollableLabel(id="title", sep=" ")
+
+    async def on_scrollable_label_clicked(self, event: ScrollableLabel.Clicked) -> None:
+        if not self.song:
+            return
+        client = ListenClient.get_instance()
+        if event.widget.id == "artist":
+            if not self.song.artists:
+                return
+            artist_id = self.song.artists[event.index].id
+            self.notify(f"Fetching data for {event.content.plain}...")
+            artist = await client.artist(artist_id)
+            if not artist:
+                return
+            # self.app.push_screen(ArtistScreen(artist, player))
+        elif event.widget.id == "title":
+            if event.index != 1:
+                return
+            if not self.song.source:
+                return
+            source_id = self.song.source.id
+            self.notify(f"Fetching data for {event.content.plain}...")
+            source = await client.source(source_id)
+            if not source:
+                return
+            # self.app.push_screen(SourceScreen(source, player))
+
+    def set_tooltips(self, string: str | None) -> None:
+        self.query_one("#title", ScrollableLabel).tooltip = string

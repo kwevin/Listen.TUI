@@ -1,15 +1,10 @@
 import sys
 from dataclasses import asdict, dataclass, field
-from os import environ
 from pathlib import Path
 from typing import Any
 
 import tomli
 import tomli_w
-from xdg import xdg_config_home
-
-from listentui import __portable__
-from listentui.utilities.constant import PACKAGE_NAME
 
 
 class InvalidConfigError(Exception):
@@ -96,7 +91,7 @@ class Player:
 
 @dataclass
 class Advance:
-    show_debug_tool: bool = False
+    stats_for_nerd: bool = False
     """Enable verbose logging and more"""
 
 
@@ -120,14 +115,15 @@ class Config:
     config: "Config | None" = None
 
     def __init__(self) -> None:
-        self.config_root = self._config_root()
+        self.config_root = self.get_config_root()
         self.config_file = self.config_root.joinpath("config.toml")
         self._conf: dict[str, Any] = {}
-        self._client: Client
-        self._rich_presence: Presence
-        self._display: Display
-        self._player: Player
-        self._advance: Advance
+        self.client: Client
+        self.rich_presence: Presence
+        self.display: Display
+        self.player: Player
+        self.advance: Advance
+        self.persistant: Persistant
         self._load_config()
         Config.config = self
 
@@ -135,47 +131,22 @@ class Config:
     def config_raw(self) -> dict[str, Any]:
         return self._conf
 
-    @property
-    def client(self):
-        return self._client
+    def get_config_root(self) -> Path:
+        return Path(sys.argv[0]).parent.resolve()
+        # if __portable__:
+        #     return Path(sys.argv[0]).parent.resolve()
 
-    @property
-    def presence(self):
-        return self._rich_presence
-
-    @property
-    def display(self):
-        return self._display
-
-    @property
-    def player(self):
-        return self._player
-
-    @property
-    def advance(self):
-        return self._advance
-
-    @property
-    def persistant(self):
-        return self._persistant
-
-    def _config_root(self) -> Path:
-        # TODO: remove this, for testing purposes
-        return Path().parent.resolve()
-        if __portable__:
-            return Path(sys.argv[0]).parent.resolve()
-
-        if sys.platform.startswith(("linux", "darwin", "freebsd", "openbsd")):
-            root = xdg_config_home().joinpath(PACKAGE_NAME).resolve()
-            if not root.is_dir():
-                root.mkdir(parents=True, exist_ok=True)
-            return root
-        if sys.platform == "win32":
-            root = Path(environ["ROAMING"]).joinpath(PACKAGE_NAME).resolve()
-            if not root.is_dir():
-                root.mkdir(parents=True, exist_ok=True)
-            return root
-        raise NotImplementedError(f"Not supported: {sys.platform}")
+        # if sys.platform.startswith(("linux", "darwin", "freebsd", "openbsd")):
+        #     root = xdg_config_home().joinpath(PACKAGE_NAME).resolve()
+        #     if not root.is_dir():
+        #         root.mkdir(parents=True, exist_ok=True)
+        #     return root
+        # if sys.platform == "win32":
+        #     root = Path(environ["ROAMING"]).joinpath(PACKAGE_NAME).resolve()
+        #     if not root.is_dir():
+        #         root.mkdir(parents=True, exist_ok=True)
+        #     return root
+        # raise NotImplementedError(f"Not supported: {sys.platform}")
 
     def _load_config(self) -> None:
         if not self.config_file.is_file():
@@ -185,12 +156,12 @@ class Config:
             with open(self.config_file, "rb") as f:
                 self._conf = tomli.load(f)
 
-        self._client = Client(**self._conf["client"])
-        self._rich_presence = Presence(**self._conf["presence"])
-        self._display = Display(**self._conf["display"])
-        self._player = Player(**self._conf["player"])
-        self._advance = Advance(**self._conf["advance"])
-        self._persistant = Persistant(**self._conf["persistant"])
+        self.client = Client(**self._conf["client"])
+        self.rich_presence = Presence(**self._conf["presence"])
+        self.display = Display(**self._conf["display"])
+        self.player = Player(**self._conf["player"])
+        self.advance = Advance(**self._conf["advance"])
+        self.persistant = Persistant(**self._conf["persistant"])
 
     def _write_config(self, config: dict[str, Any]) -> None:
         with open(self.config_file, "wb") as f:
@@ -202,9 +173,7 @@ class Config:
     def save(self):
         self._write_config(
             asdict(
-                DefaultConfig(
-                    self._client, self._display, self._rich_presence, self._player, self._advance, self._persistant
-                )
+                DefaultConfig(self.client, self.display, self.rich_presence, self.player, self.advance, self.persistant)
             )
         )
         self._load_config()

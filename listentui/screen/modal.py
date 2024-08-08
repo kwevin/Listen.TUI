@@ -17,7 +17,6 @@ from listentui.data.theme import Theme
 from listentui.listen import ListenClient
 from listentui.listen.client import RequestError
 from listentui.listen.types import Album, AlbumID, Artist, ArtistID, Song, Source
-from listentui.pages.mpvplayer import MPVStreamPlayer
 from listentui.utilities import format_time_since
 from listentui.widgets.custom import (
     DurationProgressBar,
@@ -27,6 +26,7 @@ from listentui.widgets.custom import (
     StaticButton,
     ToggleButton,
 )
+from listentui.widgets.player import MPVThread
 
 
 class SourceScreen(ModalScreen[None]):
@@ -71,11 +71,13 @@ class SourceScreen(ModalScreen[None]):
         ("escape", "cancel"),
     ]
 
-    def __init__(self, source: Source, player: MPVStreamPlayer):
+    def __init__(self, source: Source):
         super().__init__()
         self.romaji_first = Config.get_config().display.romaji_first
         self.source = source
-        self.player = player
+        self.player = MPVThread.instance
+        if self.player is None:
+            raise Exception("No running player")
         self._description_widget = (
             Collapsible(Markdown(self.source.description_to_markdown()), title="Description")
             if self.source.description
@@ -130,7 +132,7 @@ class SourceScreen(ModalScreen[None]):
         favorited = False
         if client.logged_in:
             favorited = await client.check_favorite(event.song.id)
-        self.app.push_screen(SongScreen(event.song, player=self.player, favorited=favorited))
+        self.app.push_screen(SongScreen(event.song, favorited=favorited))
 
     @on(ListView.Highlighted)
     def child_highlighed(self, event: ListView.Highlighted) -> None:
@@ -198,10 +200,12 @@ class SongScreen(ModalScreen[bool]):
         ("escape", "cancel"),
     ]
 
-    def __init__(self, song: Song, player: MPVStreamPlayer, favorited: bool = False):
+    def __init__(self, song: Song, favorited: bool = False):
         super().__init__()
         self.song = song
-        self.player = player
+        self.player = MPVThread.instance
+        if self.player is None:
+            raise Exception("No running player")
         self.is_favorited = favorited
         self.romaji_first = Config.get_config().display.romaji_first
 
@@ -256,26 +260,26 @@ class SongScreen(ModalScreen[bool]):
                     artist = await client.artist(self.song.artists[0].id)
                     if not artist:
                         return
-                    self.app.push_screen(ArtistScreen(artist, self.player))
+                    self.app.push_screen(ArtistScreen(artist))
                 else:
                     artist = await client.artist(self.song.artists[event.index].id)
                     if not artist:
                         raise Exception("Cannot be no artist")
-                    self.app.push_screen(ArtistScreen(artist, self.player))
+                    self.app.push_screen(ArtistScreen(artist))
             case "album":
                 if not self.song.album:
                     return
                 album = await client.album(self.song.album.id)
                 if not album:
                     return
-                self.app.push_screen(AlbumScreen(album, self.player))
+                self.app.push_screen(AlbumScreen(album))
             case "source":
                 if not self.song.source:
                     return
                 source = await client.source(self.song.source.id)
                 if not source:
                     return
-                self.app.push_screen(SourceScreen(source, self.player))
+                self.app.push_screen(SourceScreen(source))
             case _:
                 return
 
@@ -286,6 +290,8 @@ class SongScreen(ModalScreen[bool]):
         self.log.debug(Pretty(self.query_one("#artist", ScrollableLabel)))
 
     def action_cancel(self) -> None:
+        if self.player is None:
+            raise Exception("player is not running")
         self.player.terminate_preview()
         self.dismiss(self.is_favorited)
 
@@ -303,13 +309,13 @@ class SongScreen(ModalScreen[bool]):
     async def _on_finish(self) -> None:
         self.query_one("#preview", StaticButton).disabled = False
 
-    @on(StaticButton.Pressed, "#preview")
-    def preview(self) -> None:
-        if not self.song.snippet:
-            self.notify("No snippet to preview", severity="warning", title="Preview")
-            return
-        self.query_one("#preview", StaticButton).disabled = True
-        self.player.preview(self.song.snippet, self._on_play, self._on_error, self._on_finish)
+    # @on(StaticButton.Pressed, "#preview")
+    # def preview(self) -> None:
+    #     if not self.song.snippet:
+    #         self.notify("No snippet to preview", severity="warning", title="Preview")
+    #         return
+    #     self.query_one("#preview", StaticButton).disabled = True
+    #     self.player.preview(self.song.snippet, self._on_play, self._on_error, self._on_finish)
 
     @on(ToggleButton.Pressed, "#favorite")
     async def favorite(self) -> None:
@@ -439,10 +445,9 @@ class ArtistButton(Button):
     }}
     """
 
-    def __init__(self, artist_id: ArtistID, name: str, player: MPVStreamPlayer):
+    def __init__(self, artist_id: ArtistID, name: str):
         super().__init__(self.clamp(name))
         self.can_focus = False
-        self.player = player
         self.artist_id = artist_id
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -450,7 +455,7 @@ class ArtistButton(Button):
         artist = await client.artist(self.artist_id)
         if not artist:
             raise Exception("Artist not found")
-        self.app.push_screen(ArtistScreen(artist, player=self.player))
+        self.app.push_screen(ArtistScreen(artist))
 
     def clamp(self, text: str) -> str:
         max_length = 16
@@ -505,11 +510,13 @@ class AlbumScreen(ModalScreen[None]):
         ("escape", "cancel"),
     ]
 
-    def __init__(self, album: Album, player: MPVStreamPlayer):
+    def __init__(self, album: Album):
         super().__init__()
         self.romaji_first = Config.get_config().display.romaji_first
         self.album = album
-        self.player = player
+        self.player = MPVThread.instance
+        if self.player is None:
+            raise Exception("No running player")
 
     def compose(self) -> ComposeResult:
         with Container(id="box"):
@@ -519,9 +526,7 @@ class AlbumScreen(ModalScreen[None]):
                 if self.album.artists:
                     with Collapsible(title="Contributing artists:"), Grid():
                         for artist in self.album.artists:
-                            yield ArtistButton(
-                                artist.id, artist.format_name(romaji_first=self.romaji_first) or "", player=self.player
-                            )
+                            yield ArtistButton(artist.id, artist.format_name(romaji_first=self.romaji_first) or "")
                 if self.album.songs:
                     with VerticalScroll():
                         yield ExtendedListView(*[SongItem(song) for song in self.album.songs], initial_index=None)
@@ -532,7 +537,7 @@ class AlbumScreen(ModalScreen[None]):
         favorited = False
         if client.logged_in:
             favorited = await client.check_favorite(event.song.id)
-        self.app.push_screen(SongScreen(event.song, player=self.player, favorited=favorited))
+        self.app.push_screen(SongScreen(event.song, favorited=favorited))
 
     @on(ListView.Highlighted)
     def child_highlighed(self, event: ListView.Highlighted) -> None:
@@ -591,11 +596,13 @@ class ArtistScreen(ModalScreen[None]):
         ("escape", "cancel"),
     ]
 
-    def __init__(self, artist: Artist, player: MPVStreamPlayer):
+    def __init__(self, artist: Artist):
         super().__init__()
         self.romaji_first = Config.get_config().display.romaji_first
         self.artist = artist
-        self.player = player
+        self.player = MPVThread.instance
+        if self.player is None:
+            raise Exception("No running player")
 
     def compose(self) -> ComposeResult:
         with Container(id="box"):
@@ -626,7 +633,7 @@ class ArtistScreen(ModalScreen[None]):
         favorited = False
         if client.logged_in:
             favorited = await client.check_favorite(event.song.id)
-        self.app.push_screen(SongScreen(event.song, player=self.player, favorited=favorited))
+        self.app.push_screen(SongScreen(event.song, favorited=favorited))
 
     @on(ListView.Highlighted)
     def child_highlighed(self, event: ListView.Highlighted) -> None:
