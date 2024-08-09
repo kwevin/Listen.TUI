@@ -127,7 +127,7 @@ class HomePage(BasePage):
         if action == "play_pause":
             return True if self.player.player.paused is not None else None
         if action == "favorite":
-            return True if ListenClient.get_instance().logged_in else None
+            return ListenClient.get_instance().logged_in
         if action in {"volume_up", "volume_down"}:
             return None if self.query_one("#vol", VolumeButton).muted else True
         return True

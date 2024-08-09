@@ -24,6 +24,9 @@ class ListentuiApp(App[None]):
         if MPVThread.instance:
             MPVThread.instance.terminate()
 
+    def action_handle_url(self, url: str) -> None:
+        self.app.open_url(url, new_tab=True)
+
 
 def run() -> None:
     ListentuiApp().run()

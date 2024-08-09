@@ -13,7 +13,7 @@ rich = "^13.7.1"
 tomli = "^2.0.1"
 tomli-w = "^1.0.0"
 markdownify = "^0.12.1"
-textual = {extras = ["syntax"], version = "^0.72.0"}
+textual = {extras = ["syntax"], version = "^0.75.1"}
 gql = {extras = ["aiohttps"], version = "^3.5.0"}
 xdg = "^6.0.0"
 

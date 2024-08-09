@@ -164,6 +164,14 @@ class Artist:
             total += len(self.songs_without_album)
         self.song_count = total
 
+    def __eq__(self, value: object) -> bool:
+        if not isinstance(value, Artist):
+            raise Exception("Not supported")
+        return self.id == value.id
+
+    def __hash__(self) -> int:
+        return hash(f"{self.id}+{self.name}+{self.name_romaji}")
+
     @classmethod
     def from_data(cls: Type[Self], artist: dict[str, Any]) -> Self:
         return cls(
@@ -187,9 +195,13 @@ class Artist:
     def format_name(self, *, romaji_first: bool = True) -> str | None:
         return (self.name_romaji or self.name) if romaji_first else (self.name or self.name_romaji)
 
-    def format_socials(self, *, sep: str = ", ") -> str | None:
+    def format_socials(self, *, sep: str = ", ", use_app: bool = False) -> str | None:
         if not self.socials:
             return None
+        if use_app:
+            return f"{sep}".join(
+                [f"[@click=app.handle_url('{social.url}')]{social.name}[/]" for social in self.socials]
+            )
         return f"{sep}".join([f"[link={social.url}]{social.name}[/link]" for social in self.socials])
 
 

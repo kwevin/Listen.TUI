@@ -10,7 +10,7 @@ from textual.binding import BindingType
 from textual.containers import Center, Container, Grid, Horizontal, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Button, Collapsible, Label, ListView, Markdown
+from textual.widgets import Button, Collapsible, Label, ListView, Markdown, Static
 
 from listentui.data.config import Config
 from listentui.data.theme import Theme
@@ -257,15 +257,9 @@ class SongScreen(ModalScreen[bool]):
                 if not self.song.artists:
                     return
                 if len(self.song.artists) == 1:
-                    artist = await client.artist(self.song.artists[0].id)
-                    if not artist:
-                        return
-                    self.app.push_screen(ArtistScreen(artist))
+                    self.app.push_screen(ArtistScreen(self.song.artists[0].id))
                 else:
-                    artist = await client.artist(self.song.artists[event.index].id)
-                    if not artist:
-                        raise Exception("Cannot be no artist")
-                    self.app.push_screen(ArtistScreen(artist))
+                    self.app.push_screen(ArtistScreen(self.song.artists[event.index].id))
             case "album":
                 if not self.song.album:
                     return
@@ -451,11 +445,7 @@ class ArtistButton(Button):
         self.artist_id = artist_id
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        client = ListenClient.get_instance()
-        artist = await client.artist(self.artist_id)
-        if not artist:
-            raise Exception("Artist not found")
-        self.app.push_screen(ArtistScreen(artist))
+        self.app.push_screen(ArtistScreen(self.artist_id))
 
     def clamp(self, text: str) -> str:
         max_length = 16
@@ -564,9 +554,9 @@ class ArtistScreen(ModalScreen[None]):
         background: $background;
     }
     ArtistScreen #box {
-        width: 124;
-        max-height: 30;
-        height: auto;
+        width: 100%;
+        margin: 4 4 6 4;
+        height: 100%;
         border: thick $background 80%;
         background: $surface;
     }
@@ -591,21 +581,30 @@ class ArtistScreen(ModalScreen[None]):
     ArtistScreen ExtendedListView {
         margin-right: 2;
     }
+    ArtistScreen CollapsibleTitle {
+        width: 100%;
+        margin-right: 1;
+    }
+    ArtistScreen #esc {
+        dock: top;
+        margin: 1 0;
+    }
     """
     BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel"),
     ]
 
-    def __init__(self, artist: Artist):
+    def __init__(self, artist_id: ArtistID):
         super().__init__()
         self.romaji_first = Config.get_config().display.romaji_first
-        self.artist = artist
-        self.player = MPVThread.instance
-        if self.player is None:
-            raise Exception("No running player")
+        self.artist_id = artist_id
+        self.artist: Artist | None = None
 
     def compose(self) -> ComposeResult:
+        yield Static("[@click=app.pop_screen]< (Esc)[/]", id="esc")
         with Container(id="box"):
+            if self.artist is None:
+                return
             yield Center(Label(id="name"))
             with Horizontal():
                 yield Label(id="albums-count")
@@ -635,16 +634,34 @@ class ArtistScreen(ModalScreen[None]):
             favorited = await client.check_favorite(event.song.id)
         self.app.push_screen(SongScreen(event.song, favorited=favorited))
 
+    @on(ExtendedListView.ArtistSelected)
+    async def artist_selected(self, event: ExtendedListView.ArtistSelected) -> None:
+        if event.artist == self.artist:
+            return
+        self.app.push_screen(ArtistScreen(event.artist.id))
+
     @on(ListView.Highlighted)
     def child_highlighed(self, event: ListView.Highlighted) -> None:
         if event.item:
             self.scroll_to_widget(event.item, center=True)
 
     async def on_mount(self) -> None:
+        self.fetch_artist()
+
+    @work
+    async def fetch_artist(self) -> None:
+        self.query_one("#box", Container).loading = True
+        client = ListenClient.get_instance()
+        artist = await client.artist(self.artist_id)
+        if artist is None:
+            raise Exception("Cannot be None")
+        self.artist = artist
+        await self.recompose()
         self.query_one("#name", Label).update(self.artist.format_name(romaji_first=self.romaji_first) or "")
         self.query_one("#albums-count", Label).update(f"{self.artist.album_count or 'No'} Albums")
         self.query_one("#songs-count", Label).update(f"- {self.artist.song_count or 'No'} Songs")
-        self.query_one("#links", Label).update(f"{self.artist.format_socials(sep=' ') or 'No Socials'}")
+        self.query_one("#links", Label).update(f"{self.artist.format_socials(sep=' ', use_app=True) or 'No Socials'}")
+        self.query_one("#box", Container).loading = False
 
     def action_cancel(self) -> None:
         self.dismiss()

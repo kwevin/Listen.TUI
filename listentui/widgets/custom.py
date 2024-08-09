@@ -1,4 +1,6 @@
-from typing import Any, ClassVar, Iterable, Optional, Tuple
+from __future__ import annotations
+
+from typing import Any, ClassVar, Iterable, Tuple
 
 from rich.cells import cached_cell_len
 from rich.console import RenderableType
@@ -16,7 +18,7 @@ from textual.widgets import Button, DataTable, Label, ListItem, ListView, Progre
 from listentui.data.config import Config
 from listentui.data.theme import Theme
 from listentui.listen import ListenClient, Song
-from listentui.listen.types import Event, ListenWsData, Requester
+from listentui.listen.types import Artist, Event, ListenWsData, Requester
 
 
 class TextRange:
@@ -529,12 +531,26 @@ class ToggleButton(StaticButton):
 
 
 class SongItem(ListItem):
+    SCOPED_CSS = False
     DEFAULT_CSS = """
     SongItem {
         padding: 1 0 1 0;
     }
-    SongItem Label {
+    SongItem ScrollableLabel {
         margin-left: 1;
+        width: auto;
+    }
+    SongItem > Widget :hover {
+        background: $boost !important;
+    }
+    ExtendedListView SongItem :hover {
+        background: $boost !important;
+    }
+    ExtendedListView > SongItem.--highlight {
+        background: $background-lighten-1;
+    }
+    ExtendedListView:focus > SongItem.--highlight {
+        background: $background-lighten-1;
     }
     """
 
@@ -542,15 +558,14 @@ class SongItem(ListItem):
         self.song = song
         romaji_first = Config.get_config().display.romaji_first
         title = song.format_title(romaji_first=romaji_first)
-        artist = song.format_artists(show_character=False, romaji_first=romaji_first, embed_link=True)
+        artists = song.format_artists_list(romaji_first=romaji_first) or []
         super().__init__(
-            Label(
+            ScrollableLabel(
                 Text.from_markup(f"{title}"),
                 classes="item-title",
-                shrink=True,
             ),
-            Label(
-                Text.from_markup(f"[{Theme.ACCENT}]{artist}[/]"),
+            ScrollableLabel(
+                *[Text.from_markup(f"[{Theme.ACCENT}]{artist}[/]") for artist in artists],
                 classes="item-artist",
             ),
         )
@@ -558,36 +573,61 @@ class SongItem(ListItem):
     class SongChildClicked(Message):
         """For informing with the parent ListView that we were clicked"""
 
-        def __init__(self, item: "SongItem") -> None:
-            self.item = item
+        def __init__(self, item: SongItem) -> None:
             super().__init__()
+            self.item = item
+
+    class SongLabelClicked(Message):
+        def __init__(self, artist: Artist) -> None:
+            super().__init__()
+            self.artist = artist
+
+    @on(ScrollableLabel.Clicked)
+    def scroll_label_clicked(self, event: ScrollableLabel.Clicked) -> None:
+        event.stop()
+        if self.song.artists is None:
+            return
+        artist = self.song.artists[event.index]
+        self.post_message(self.SongLabelClicked(artist))
 
     async def _on_click(self, _: events.Click) -> None:
+        if any(label.mouse_hover for label in self.query(ScrollableLabel)):
+            return
         self.post_message(self.SongChildClicked(self))
 
 
 class ExtendedListView(ListView):
-    DEFAULT_CSS = f"""
-    ExtendedListView {{
+    DEFAULT_CSS = """
+    ExtendedListView {
         height: auto;
-    }}
-    ExtendedListView SongItem {{
+    }
+    ExtendedListView SongItem {
         margin-bottom: 1;
-        background: {Theme.BACKGROUND};
-    }}
+        background: $background-lighten-1;
+    }
     """
 
     class SongSelected(Message):
         def __init__(self, song: Song) -> None:
-            self.song = song
             super().__init__()
+            self.song = song
+
+    class ArtistSelected(Message):
+        def __init__(self, artist: Artist) -> None:
+            super().__init__()
+            self.artist = artist
 
     @on(SongItem.SongChildClicked)
-    def feed_clicked(self, event: SongItem.SongChildClicked) -> None:
+    def song_clicked(self, event: SongItem.SongChildClicked) -> None:
+        event.stop()
         self.post_message(self.SongSelected(event.item.song))
 
+    @on(SongItem.SongLabelClicked)
+    def song_label_clicked(self, event: SongItem.SongLabelClicked) -> None:
+        event.stop()
+        self.post_message(self.ArtistSelected(event.artist))
+
     def action_select_cursor(self) -> None:
-        """Select the current item in the list."""
         selected_child: SongItem | None = self.highlighted_child  # type: ignore
         if selected_child is None:
             return
@@ -661,68 +701,3 @@ class VanityBar(Widget):
         self.listener = data.listener
         self.requester = data.requester
         self.event = data.event
-
-
-class SongContainer(Widget):
-    DEFAULT_CSS = """
-    SongContainer {
-        width: 1fr;
-        height: auto;
-
-        #artist {
-            color: rgb(249, 38, 114);
-        }
-    }
-    """
-    song: reactive[None | Song] = reactive(None, layout=True, init=False)
-
-    def __init__(self, song: Optional[Song] = None) -> None:
-        super().__init__()
-        if song:
-            self.song = song
-
-    def watch_song(self, song: Song) -> None:
-        romaji_first = Config.get_config().display.romaji_first
-        self.artist = song.format_artists_list(romaji_first=romaji_first) or []
-        self.title = song.format_title(romaji_first=romaji_first) or ""
-        self.source = song.format_source(romaji_first=romaji_first)
-        self.query_one("#artist", ScrollableLabel).update(*[Text.from_markup(artist) for artist in self.artist])
-        self.query_one("#title", ScrollableLabel).update(Text.from_markup(f"{self.title}"))
-        if self.source:
-            self.query_one("#title", ScrollableLabel).append(Text.from_markup(f"[cyan]\\[{self.source}][/cyan]"))
-
-    def update_song(self, song: Song) -> None:
-        self.song = song
-
-    def compose(self) -> ComposeResult:
-        yield VanityBar()
-        yield ScrollableLabel(id="artist")
-        yield ScrollableLabel(id="title", sep=" ")
-
-    async def on_scrollable_label_clicked(self, event: ScrollableLabel.Clicked) -> None:
-        if not self.song:
-            return
-        client = ListenClient.get_instance()
-        if event.widget.id == "artist":
-            if not self.song.artists:
-                return
-            artist_id = self.song.artists[event.index].id
-            self.notify(f"Fetching data for {event.content.plain}...")
-            artist = await client.artist(artist_id)
-            if not artist:
-                return
-            # self.app.push_screen(ArtistScreen(artist, player))
-        elif event.widget.id == "title":
-            if event.index != 1:
-                return
-            if not self.song.source:
-                return
-            source_id = self.song.source.id
-            self.notify(f"Fetching data for {event.content.plain}...")
-            source = await client.source(source_id)
-            if not source:
-                return
-            # self.app.push_screen(SourceScreen(source, player))
-
-    def set_tooltips(self, string: str | None) -> None:
-        self.query_one("#title", ScrollableLabel).tooltip = string
