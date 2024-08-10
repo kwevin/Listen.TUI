@@ -13,12 +13,10 @@ from textual import on, work
 from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.message import Message
-from textual.reactive import var
 from textual.widget import Widget
 from textual.widgets import Label
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
-from listentui.data.config import Config
 from listentui.listen.types import ListenWsData
 from listentui.widgets.durationProgressBar import DurationProgressBar
 from listentui.widgets.mpvThread import MPVThread
@@ -51,8 +49,6 @@ class Player(Widget):
     }
     """
 
-    retries: var[int] = var(0)
-
     class WebsocketUpdated(Message):
         def __init__(self, data: ListenWsData) -> None:
             super().__init__()
@@ -70,8 +66,7 @@ class Player(Widget):
         self.ws_data: ListenWsData | None = None
         self.progress_bar = DurationProgressBar(stop=True, pause_on_end=True)
         self.player = MPVThread(self)
-        self.idle_lock = False
-        self.soft_cap = 5
+        self.retries = 0
         self.websocket_time = 0
         self.mpv_time = 0
         self.start_time = time.time()
@@ -99,17 +94,21 @@ class Player(Widget):
         self.query_one("#cache", Label).tooltip = "Cache"
         self.query_one("#time", Label).tooltip = "Uptime"
 
-    def watch_retries(self, new_value: int) -> None:
-        self._log.debug(f"retries = {new_value} / {self.soft_cap}")
+    def update_retries(self, retry: int, soft_cap: int, hard_cap: int, timeout: int) -> None:
         retries = self.query_one("#retries", Label)
-        if new_value > 0:
-            retries.update(f"{new_value}/{self.soft_cap}!")
-            if new_value > self.soft_cap:
+        if retry > 0:
+            retries.update(f"{retry}/{soft_cap}|{hard_cap}")
+            if retry > soft_cap:
+                retries.styles.color = "pink"
+            elif retry > hard_cap:
                 retries.styles.color = "red"
             else:
                 retries.styles.color = "yellow"
+
+            retries.tooltip = f"timeout: {timeout}s"
         else:
             retries.update("")
+            retries.styles.visibility = "hidden"
 
     def update_cache(self) -> None:
         if not self.player.cache:
@@ -159,22 +158,6 @@ class Player(Widget):
         self.progress_bar.resume()
         self.can_update = True
 
-    @on(MPVThread.CoreIdle)
-    def on_idle(self, state: MPVThread.CoreIdle) -> None:
-        state.stop()
-        idle = state.state
-
-        self._log.debug(f"{idle = }")
-
-        if idle is False and self.idle_lock is True:
-            self.retries = 0
-            self.idle_lock = False
-            self.workers.cancel_group(self, "MPV_Idle_Restarter")
-
-        if idle is True and self.player.paused is False and self.idle_lock is False:
-            self.idle_lock = True
-            self._start_idle_restarter()
-
     @work(group="wait_update", exclusive=True)
     async def can_force_update(self, data: ListenWsData) -> None:
         start = time.time()
@@ -188,23 +171,53 @@ class Player(Widget):
         self.query_one(VanityBar).update_vanity(data)
         self.can_update = False
 
-    @work(group="MPV_Idle_Restarter", exclusive=True, thread=True)
-    async def _start_idle_restarter(self) -> None:
-        count = 0
-        timeout = Config.get_config().player.timeout_restart
-        while count < timeout:
-            count += 1
-            await asyncio.sleep(1)
+    @on(MPVThread.FailedRestart)
+    def player_failed_restart(self, event: MPVThread.FailedRestart) -> None:
+        self.retries = event.retry_no
+        self.update_retries(event.retry_no, event.soft_cap, event.hard_cap, event.timeout)
 
-        while self.idle_lock is True:
-            if self.retries < self.soft_cap:
-                self.player.restart()
-            else:
-                self.player.hard_restart()
-
-            self.retries += 1
-            await asyncio.sleep(10)
+    @on(MPVThread.SuccessfulRestart)
+    def player_sucessful_restart(self, event: MPVThread.SuccessfulRestart) -> None:
         self.retries = 0
+        self.update_retries(0, 0, 0, 0)
+
+    @on(MPVThread.Fail)
+    def player_failed(self, event: MPVThread.Fail) -> None:
+        self.app.exit("Player failed to connect / regain connection")
+
+    # @on(MPVThread.CoreIdle)
+    # def on_idle(self, state: MPVThread.CoreIdle) -> None:
+    #     state.stop()
+    #     idle = state.state
+
+    #     self._log.debug(f"{idle = }")
+
+    #     if idle is False and self.idle_lock is True:
+    #         self.retries = 0
+    #         self.idle_lock = False
+    #         self.workers.cancel_group(self, "MPV_Idle_Restarter")
+
+    #     if idle is True and self.player.paused is False and self.idle_lock is False:
+    #         self.idle_lock = True
+    #         self._start_idle_restarter()
+
+    # @work(group="MPV_Idle_Restarter", exclusive=True, thread=True)
+    # async def _start_idle_restarter(self) -> None:
+    #     count = 0
+    #     timeout = Config.get_config().player.timeout_restart
+    #     while count < timeout:
+    #         count += 1
+    #         await asyncio.sleep(1)
+
+    #     while self.idle_lock is True:
+    #         if self.retries < self.soft_cap:
+    #             self.player.restart()
+    #         else:
+    #             self.player.hard_restart()
+
+    #         self.retries += 1
+    #         await asyncio.sleep(10)
+    #     self.retries = 0
 
     @work(exclusive=True, group="websocket")
     async def websocket(self) -> None:

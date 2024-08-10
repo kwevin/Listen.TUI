@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from logging import DEBUG, INFO, WARNING, getLogger
 from threading import Lock, Thread
+from time import sleep
 from typing import Any, Self, Type
 
 from mpv import MPV, MpvEvent, MpvEventEndFile, ShutdownError
@@ -16,6 +17,63 @@ from textual.widget import Widget
 from listentui.data.config import Config
 
 
+class MPVWatcher(Thread):
+    def __init__(self, thread: MPVThread) -> None:
+        super().__init__(name="MPVWatcher", daemon=True)
+        self._log = getLogger(__name__)
+        self.is_terminated = False
+        self.player = thread
+        self.base_timeout = 20
+        self.retries = 0
+        self.soft_retry_cap = 5
+        self.hard_retry_cap = 10
+        self.timeout_cap = 60
+
+    def run(self) -> None:
+        while True:
+            if not self.is_player_alive():
+                self._log.debug("Player is not alive, idling...")
+                sleep(1)
+                continue
+            if self.is_not_playing():
+                self.dispatch_restart()
+                continue
+            sleep(5)
+            continue
+
+    def is_player_alive(self) -> bool:
+        return self.player.player.core_shutdown
+
+    def is_not_playing(self) -> bool:
+        return bool(self.player.core_idle is True and self.player.paused is False)
+
+    def dispatch_restart(self) -> None:
+        timeout = min(self.base_timeout + 5 * self.retries, self.timeout_cap)
+
+        self._log.debug(
+            f"Attempting restart: {self.retries}/{self.soft_retry_cap} max: {self.hard_retry_cap} current timeout: {timeout}"  # noqa: E501
+        )
+
+        if self.retries >= self.hard_retry_cap:
+            self.player.main.post_message(self.player.Fail())
+            return
+
+        try:
+            if self.retries > self.soft_retry_cap:
+                self.player.hard_restart(timeout)
+            else:
+                self.player.restart(timeout)
+
+            self._log.debug("Player sucessfully restarted")
+            self.retries = 0
+            self.player.main.post_message(self.player.SuccessfulRestart())
+        except TimeoutError:
+            self.retries += 1
+            self.player.main.post_message(
+                self.player.FailedRestart(self.retries, timeout, self.soft_retry_cap, self.hard_retry_cap)
+            )
+
+
 class MPVThread(Thread):
     instance: MPVThread | None = None
 
@@ -23,7 +81,8 @@ class MPVThread(Thread):
         super().__init__(name="MPVThread", daemon=True)
         self.main = main
         self.stream_url = "https://listen.moe/stream"
-        self.player = MPV(**self.get_options(), log_handler=self.log_handler)
+        self.player = MPV(ytdl=True, **self.get_options(), log_handler=self.log_handler)
+        self.watcher = MPVWatcher(self)
         self.muted_volume = 0
         self.pv_player: MPV | None = None
         self.cache: MPVThread.DemuxerCacheState | None = None
@@ -37,10 +96,20 @@ class MPVThread(Thread):
         def __init__(self) -> None:
             super().__init__()
 
-    class CoreIdle(Message):
-        def __init__(self, state: bool) -> None:
+    @dataclass
+    class FailedRestart(Message):
+        retry_no: int
+        timeout: int
+        soft_cap: int
+        hard_cap: int
+
+    class SuccessfulRestart(Message):
+        def __init__(self) -> None:
             super().__init__()
-            self.state = state
+
+    class Fail(Message):
+        def __init__(self) -> None:
+            super().__init__()
 
     @dataclass
     class DemuxerCacheState(Message):
@@ -151,10 +220,10 @@ class MPVThread(Thread):
         except (RuntimeError, ShutdownError):
             return None
 
-    def _watch_core_idle(self, _: bool, new_value: bool | None) -> None:
-        if new_value is None:
-            self._log.debug("Unable to determine player idle status")
-        self.main.post_message(self.CoreIdle(new_value or False))
+    # def _watch_core_idle(self, _: bool, new_value: bool | None) -> None:
+    #     if new_value is None:
+    #         self._log.debug("Unable to determine player idle status")
+    #     self.main.post_message(self.CoreIdle(new_value or False))
 
     def _watch_metadata(self, _: dict[str, Any], new_value: dict[str, Any] | None) -> None:
         if new_value is None:
@@ -188,14 +257,19 @@ class MPVThread(Thread):
         self.cache = self.DemuxerCacheState.from_cache_state(new_value)
 
     def run(self) -> None:
-        self.start_mpv()
+        try:
+            self.start_mpv()
+            self.watcher.start()
+        except TimeoutError:
+            self.main.post_message(self.Fail())
+            return
 
-    def start_mpv(self) -> None:
+    def start_mpv(self, timeout: int = 120) -> None:
         self.player.play(self.stream_url)
-        self.player.wait_until_playing(timeout=60)
+        self.player.wait_until_playing(timeout=timeout)
         MPVThread.instance = self
         self.main.post_message(self.Started())
-        self.player.observe_property("core-idle", self._watch_core_idle)
+        # self.player.observe_property("core-idle", self._watch_core_idle)
         self.player.observe_property("metadata", self._watch_metadata)
         self.player.observe_property("demuxer-cache-state", self._watch_cache)
 
@@ -224,18 +298,18 @@ class MPVThread(Thread):
         #     self.main.post_message(self.NewSong())
         self._log.log(level=level, msg=f"[{component}] {message}")
 
-    def restart(self) -> None:
+    def restart(self, timeout: int = 60) -> None:
         self._log.debug("soft restarting")
         state = self.paused
         self.player.play(self.stream_url)
-        self.player.wait_until_playing(timeout=60)
+        self.player.wait_until_playing(timeout=timeout)
         self.paused = state or False
 
-    def hard_restart(self) -> None:
+    def hard_restart(self, timeout: int = 60) -> None:
         self._log.debug("hard restarting")
         self.terminate()
         self.player = MPV(**self.get_options())
-        self.start_mpv()
+        self.start_mpv(timeout)
 
     def play(self) -> None:
         with self._lock:
@@ -299,7 +373,7 @@ class MPVThread(Thread):
         with self._pv_lock:
             self.main.notify(f"got {song_url}")
             final_url = f"https://cdn.listen.moe/snippets/{song_url}".strip()
-            self.pv_player = MPV(log_handler=self.log_handler, **self.get_options())
+            self.pv_player = MPV(ytdl=True, **self.get_options(), log_handler=self.log_handler)
             pv_data = None
 
             @self.pv_player.event_callback("end-file")

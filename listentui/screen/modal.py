@@ -61,7 +61,7 @@ class SourceScreen(ModalScreen[None]):
     SourceScreen VerticalScroll {
         margin: 1 0;
     }
-    SourceScreen ExtendedListView {
+    SourceScreen SongListView {
         margin-right: 2;
     }
     """
@@ -155,9 +155,9 @@ class SongScreen(ModalScreen[bool]):
     SongScreen ScrollableLabel {
         height: 1;
     }
-    SongScreen #artist {
-        color: red;
-    }
+    # SongScreen #artist {
+    #     color: red;
+    # }
     SongScreen Grid {
         grid-size: 3 4;
         grid-gutter: 1 2;
@@ -190,6 +190,12 @@ class SongScreen(ModalScreen[bool]):
     SongScreen EscButton {
         padding-left: 2;
     }
+    SongScreen .hidden {
+        display: none;
+    }
+    SongScreen DurationProgressBar {
+        offset: 0 1;
+    }
     """
     BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel"),
@@ -215,7 +221,7 @@ class SongScreen(ModalScreen[bool]):
                     Text.from_markup(self.song.format_title(romaji_first=self.romaji_first) or ""), id="title"
                 ),
                 ScrollableLabel(
-                    *[Text.from_markup(artist) for artist in a]
+                    *[Text.from_markup(f"[red]{artist}[/]") for artist in a]
                     if (a := self.song.format_artists_list(romaji_first=self.romaji_first)) is not None
                     else [],
                     id="artist",
@@ -241,7 +247,7 @@ class SongScreen(ModalScreen[bool]):
                 yield StaticButton("Preview", id="preview")
                 yield DurationProgressBar(stop=True, total=0, pause_on_end=True)
                 yield ToggleButton("Favorite", check_user=True, hidden=True, id="favorite")
-                yield StaticButton("Request", id="request")
+                yield StaticButton("Request", check_user=True, hidden=True, id="request")
 
     async def on_scrollable_label_clicked(self, event: ScrollableLabel.Clicked) -> None:  # noqa: PLR0911
         container_id = event.widget.id
@@ -287,6 +293,8 @@ class SongScreen(ModalScreen[bool]):
             raise Exception("Song cannot be None")
         self.song = song
         await self.recompose()
+        if client.logged_in:
+            self.is_favorited: bool = await client.check_favorite(song.id) or False
         self.query_one("#favorite", ToggleButton).set_toggle_state(self.is_favorited)
         self.query_one(Grid).loading = False
 
@@ -496,7 +504,7 @@ class AlbumScreen(ModalScreen[None]):
     AlbumScreen Collapsible {
         margin: 1 0;
     }
-    AlbumScreen ExtendedListView {
+    AlbumScreen SongListView {
         margin-right: 2;
     }
     AlbumScreen Collapsible Grid {
@@ -584,7 +592,7 @@ class ArtistScreen(ModalScreen[None]):
     ArtistScreen VerticalScroll {
         margin: 1 0;
     }
-    ArtistScreen ExtendedListView {
+    ArtistScreen SongListView {
         margin-right: 2;
     }
     ArtistScreen CollapsibleTitle {
