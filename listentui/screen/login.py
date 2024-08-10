@@ -1,3 +1,4 @@
+from gql.transport.exceptions import TransportQueryError
 from textual import work
 from textual.app import ComposeResult
 from textual.containers import Center
@@ -63,12 +64,12 @@ class LoginScreen(Screen[bool]):
         self.dismiss(True)
         # self.set_timer(0.5, lambda: self.dismiss(True))
 
-    def set_error(self) -> None:
+    def set_error(self, message: str | None = None) -> None:
         self.state = False
         status = self.query_one("#status", Label)
         status.loading = False
         status.add_class("error")
-        status.update("Login failed, please check your username and password")
+        status.update("Login failed, please check your username and password" if message is None else message)
 
     async def on_click(self) -> None:
         if not self.state:
@@ -82,8 +83,8 @@ class LoginScreen(Screen[bool]):
         token = config.persistant.token
         if username and password:
             client = await ListenClient.login(username, password, token)
-            if not client:
-                self.set_error()
+            if isinstance(client, TransportQueryError):
+                self.set_error(str(client.errors[0].get("message")) if client.errors else None)
                 return
         else:
             client = ListenClient.get_instance()

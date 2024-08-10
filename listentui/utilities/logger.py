@@ -9,6 +9,8 @@ from textual.binding import Binding, BindingType
 from textual.css.query import QueryError
 from textual.widgets import RichLog
 
+from listentui.data.config import Config
+
 
 class RichLogExtended(RichLog):
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -47,12 +49,13 @@ class RichLogHandler(Handler):
         else:
             app.log.logging(message)
             # write to all RichLogExtended widgets
-            try:
-                RichLogExtended.data.append(self.format(record))
-                for widget in app.query(RichLogExtended):
-                    widget.write(message)
-            except QueryError:
-                pass
+            if Config.get_config().advance.stats_for_nerd:
+                try:
+                    RichLogExtended.data.append(self.format(record))
+                    for widget in app.query(RichLogExtended):
+                        widget.write(message)
+                except QueryError:
+                    pass
 
 
 def get_logger() -> Logger:

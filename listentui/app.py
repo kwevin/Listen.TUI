@@ -17,6 +17,7 @@ class ListentuiApp(App[None]):
         status = await self.push_screen_wait(LoginScreen())
         if not status:
             self.exit(message="Login failed, please check your username and password")
+            return
         self.push_screen(MainScreen())
 
     def on_unmount(self) -> None:

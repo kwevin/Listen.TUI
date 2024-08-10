@@ -20,9 +20,10 @@ from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from listentui.data.config import Config
 from listentui.listen.types import ListenWsData
-from listentui.widgets.custom import DurationProgressBar, VanityBar
+from listentui.widgets.durationProgressBar import DurationProgressBar
 from listentui.widgets.mpvThread import MPVThread
 from listentui.widgets.songContainer import SongContainer
+from listentui.widgets.vanityBar import VanityBar
 
 
 class Player(Widget):

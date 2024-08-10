@@ -10,8 +10,8 @@ from textual.widgets import Footer, Static
 from listentui.data.config import Config
 from listentui.listen.client import ListenClient
 from listentui.pages.base import BasePage
-from listentui.widgets.custom import ToggleButton
 from listentui.widgets.player import Player
+from listentui.widgets.songListView import ToggleButton
 
 
 class VolumeButton(ToggleButton):

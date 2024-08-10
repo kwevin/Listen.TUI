@@ -381,7 +381,7 @@ class ListenClient:
         )
 
     @classmethod
-    async def login(cls, username: str, password: str, user_token: Optional[str] = None) -> Self | None:
+    async def login(cls, username: str, password: str, user_token: Optional[str] = None) -> Self | TransportQueryError:
         """return a new instance of ListenClient with a logged in user else None if the login failed"""
         if user_token and not cls.validate_token(user_token):
             return await cls.login(username, password)
@@ -411,8 +411,8 @@ class ListenClient:
             try:
                 async with client as session:
                     res: dict[str, Any] = await session.execute(document=query.login, variable_values=params)  # pyright: ignore
-            except TransportQueryError:
-                return None
+            except TransportQueryError as e:
+                return e
             user: dict[str, Any] = res["login"]["user"]
             token: str = res["login"]["token"]
 
@@ -579,12 +579,10 @@ class ListenClient:
         return [Song.from_data(song) for song in songs]
 
     @overload
-    async def check_favorite(self, song_ids: list[Union[SongID, int]]) -> dict[SongID, bool]:
-        ...
+    async def check_favorite(self, song_ids: list[Union[SongID, int]]) -> dict[SongID, bool]: ...
 
     @overload
-    async def check_favorite(self, song_id: Union[SongID, int]) -> bool:
-        ...
+    async def check_favorite(self, song_id: Union[SongID, int]) -> bool: ...
 
     @requires_auth
     async def check_favorite(self, song_id: Union[SongID, int] | list[Union[SongID, int]]) -> bool | dict[SongID, bool]:

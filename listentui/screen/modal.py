@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Optional
 
-from rich.pretty import Pretty
 from rich.text import Text
 from textual import events, on, work
 from textual.app import ComposeResult
@@ -16,17 +15,16 @@ from listentui.data.config import Config
 from listentui.data.theme import Theme
 from listentui.listen import ListenClient
 from listentui.listen.client import RequestError
-from listentui.listen.types import Album, AlbumID, Artist, ArtistID, Song, Source
+from listentui.listen.types import Album, AlbumID, Artist, ArtistID, Song, SongID, Source
 from listentui.utilities import format_time_since
-from listentui.widgets.custom import (
-    DurationProgressBar,
-    ExtendedListView,
-    ScrollableLabel,
+from listentui.widgets.buttons import StaticButton, ToggleButton
+from listentui.widgets.durationProgressBar import DurationProgressBar
+from listentui.widgets.mpvThread import MPVThread
+from listentui.widgets.scrollableLabel import ScrollableLabel
+from listentui.widgets.songListView import (
     SongItem,
-    StaticButton,
-    ToggleButton,
+    SongListView,
 )
-from listentui.widgets.player import MPVThread
 
 
 class SourceScreen(ModalScreen[None]):
@@ -96,14 +94,12 @@ class SourceScreen(ModalScreen[None]):
                     for album_id, songs in id_to_song.items():
                         album = id_to_album[album_id]
                         yield Collapsible(
-                            ExtendedListView(*[SongItem(song) for song in songs], initial_index=None),
+                            SongListView(*[SongItem(song) for song in songs], initial_index=None),
                             title=f"{album.format_name(romaji_first=self.romaji_first)}\n{len(songs)} Songs",
                         )
                 if self.source.songs_without_album:
                     yield Collapsible(
-                        ExtendedListView(
-                            *[SongItem(song) for song in self.source.songs_without_album], initial_index=None
-                        ),
+                        SongListView(*[SongItem(song) for song in self.source.songs_without_album], initial_index=None),
                         title=f"- No source -\n{len(self.source.songs_without_album)} Songs",
                     )
 
@@ -126,13 +122,9 @@ class SourceScreen(ModalScreen[None]):
             albums[song.album.id].append(song)
         return albums
 
-    @on(ExtendedListView.SongSelected)
-    async def song_selected(self, event: ExtendedListView.SongSelected) -> None:
-        client = ListenClient.get_instance()
-        favorited = False
-        if client.logged_in:
-            favorited = await client.check_favorite(event.song.id)
-        self.app.push_screen(SongScreen(event.song, favorited=favorited))
+    @on(SongListView.SongSelected)
+    async def song_selected(self, event: SongListView.SongSelected) -> None:
+        self.app.push_screen(SongScreen(event.song.id))
 
     @on(ListView.Highlighted)
     def child_highlighed(self, event: ListView.Highlighted) -> None:
@@ -155,18 +147,18 @@ class SourceScreen(ModalScreen[None]):
 class SongScreen(ModalScreen[bool]):
     """Screen for confirming actions"""
 
-    DEFAULT_CSS = f"""
-    SongScreen {{
+    DEFAULT_CSS = """
+    SongScreen {
         align: center middle;
         background: $background;
-    }}
-    SongScreen ScrollableLabel {{
+    }
+    SongScreen ScrollableLabel {
         height: 1;
-    }}
-    SongScreen #artist {{
-        color: {Theme.ACCENT};
-    }}
-    SongScreen Grid {{
+    }
+    SongScreen #artist {
+        color: red;
+    }
+    SongScreen Grid {
         grid-size: 3 4;
         grid-gutter: 1 2;
         grid-rows: 1 3 2 1fr;
@@ -175,42 +167,46 @@ class SongScreen(ModalScreen[bool]):
         height: 14;
         border: thick $background 80%;
         background: $surface;
-    }}
-    SongScreen > Container {{
+    }
+    SongScreen > Container {
         height: 3;
         width: 100%;
         align: left middle;
-    }}
-    SongScreen Horizontal {{
+    }
+    SongScreen Horizontal {
         column-span: 3;
         width: 100%;
         align: center middle;
-    }}
-    SongScreen Horizontal > * {{
+    }
+    SongScreen Horizontal > * {
         margin-right: 1;
-    }}
-    SongScreen StaticButton {{
+    }
+    SongScreen StaticButton {
         min-width: 13;
-    }}
-    SongScreen #favorite {{
+    }
+    SongScreen #favorite {
         min-width: 14;
-    }}
+    }
+    SongScreen EscButton {
+        padding-left: 2;
+    }
     """
     BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel"),
     ]
 
-    def __init__(self, song: Song, favorited: bool = False):
+    def __init__(self, song_id: SongID, favorited: bool = False):
         super().__init__()
-        self.song = song
-        self.player = MPVThread.instance
-        if self.player is None:
-            raise Exception("No running player")
+        self.song_id = song_id
+        self.song: Song | None = None
         self.is_favorited = favorited
         self.romaji_first = Config.get_config().display.romaji_first
 
     def compose(self) -> ComposeResult:
+        yield EscButton()
         with Grid():
+            if self.song is None:
+                return
             yield Label("Track/Artist")
             yield Label("Album")
             yield Label("Source")
@@ -244,13 +240,15 @@ class SongScreen(ModalScreen[bool]):
             with Horizontal(id="horizontal"):
                 yield StaticButton("Preview", id="preview")
                 yield DurationProgressBar(stop=True, total=0, pause_on_end=True)
-                yield ToggleButton("Favorite", check_user=True, id="favorite")
+                yield ToggleButton("Favorite", check_user=True, hidden=True, id="favorite")
                 yield StaticButton("Request", id="request")
 
     async def on_scrollable_label_clicked(self, event: ScrollableLabel.Clicked) -> None:  # noqa: PLR0911
         container_id = event.widget.id
         client = ListenClient.get_instance()
         if not container_id:
+            return
+        if not self.song:
             return
         match container_id:
             case "artist":
@@ -278,47 +276,59 @@ class SongScreen(ModalScreen[bool]):
                 return
 
     def on_mount(self) -> None:
-        self.query_one("#favorite", ToggleButton).set_toggle_state(self.is_favorited)
+        self.query_one(Grid).loading = True
+        self.fetch_song()
 
-    def on_click(self, events: events.Click) -> None:
-        self.log.debug(Pretty(self.query_one("#artist", ScrollableLabel)))
+    @work
+    async def fetch_song(self) -> None:
+        client = ListenClient.get_instance()
+        song = await client.song(self.song_id)
+        if song is None:
+            raise Exception("Song cannot be None")
+        self.song = song
+        await self.recompose()
+        self.query_one("#favorite", ToggleButton).set_toggle_state(self.is_favorited)
+        self.query_one(Grid).loading = False
 
     def action_cancel(self) -> None:
-        if self.player is None:
-            raise Exception("player is not running")
-        self.player.terminate_preview()
+        if MPVThread.instance is not None:
+            MPVThread.instance.terminate_preview()
         self.dismiss(self.is_favorited)
 
-    @work(group="preview")
-    async def _on_play(self) -> None:
-        self.query_one(DurationProgressBar).total = 15
-        self.query_one(DurationProgressBar).reset()
-        self.query_one(DurationProgressBar).resume()
+    # @work(group="preview")
+    # async def _on_play(self) -> None:
+    #     self.query_one(DurationProgressBar).total = 15
+    #     self.query_one(DurationProgressBar).reset()
+    #     self.query_one(DurationProgressBar).resume()
 
-    @work(group="preview")
-    async def _on_error(self) -> None:
-        self.notify("Unable to preview song :(", severity="error", title="Preview")
+    # @work(group="preview")
+    # async def _on_error(self) -> None:
+    #     self.notify("Unable to preview song :(", severity="error", title="Preview")
 
-    @work(group="preview")
-    async def _on_finish(self) -> None:
-        self.query_one("#preview", StaticButton).disabled = False
+    # @work(group="preview")
+    # async def _on_finish(self) -> None:
+    #     self.query_one("#preview", StaticButton).disabled = False
 
-    # @on(StaticButton.Pressed, "#preview")
-    # def preview(self) -> None:
-    #     if not self.song.snippet:
-    #         self.notify("No snippet to preview", severity="warning", title="Preview")
-    #         return
-    #     self.query_one("#preview", StaticButton).disabled = True
-    #     self.player.preview(self.song.snippet, self._on_play, self._on_error, self._on_finish)
+    # # @on(StaticButton.Pressed, "#preview")
+    # # def preview(self) -> None:
+    # #     if not self.song.snippet:
+    # #         self.notify("No snippet to preview", severity="warning", title="Preview")
+    # #         return
+    # #     self.query_one("#preview", StaticButton).disabled = True
+    # #     self.player.preview(self.song.snippet, self._on_play, self._on_error, self._on_finish)
 
     @on(ToggleButton.Pressed, "#favorite")
     async def favorite(self) -> None:
+        if self.song is None:
+            raise Exception("Song cannot be None")
         self.is_favorited = not self.is_favorited
         client = ListenClient.get_instance()
         await client.favorite_song(self.song.id)
 
     @on(StaticButton.Pressed, "#request")
     async def request(self) -> None:
+        if self.song is None:
+            raise Exception("Song cannot be None")
         client = ListenClient.get_instance()
         res: Song | RequestError = await client.request_song(self.song.id, exception_on_error=False)
         if isinstance(res, Song):
@@ -519,15 +529,11 @@ class AlbumScreen(ModalScreen[None]):
                             yield ArtistButton(artist.id, artist.format_name(romaji_first=self.romaji_first) or "")
                 if self.album.songs:
                     with VerticalScroll():
-                        yield ExtendedListView(*[SongItem(song) for song in self.album.songs], initial_index=None)
+                        yield SongListView(*[SongItem(song) for song in self.album.songs], initial_index=None)
 
-    @on(ExtendedListView.SongSelected)
-    async def song_selected(self, event: ExtendedListView.SongSelected) -> None:
-        client = ListenClient.get_instance()
-        favorited = False
-        if client.logged_in:
-            favorited = await client.check_favorite(event.song.id)
-        self.app.push_screen(SongScreen(event.song, favorited=favorited))
+    @on(SongListView.SongSelected)
+    async def song_selected(self, event: SongListView.SongSelected) -> None:
+        self.app.push_screen(SongScreen(event.song.id))
 
     @on(ListView.Highlighted)
     def child_highlighed(self, event: ListView.Highlighted) -> None:
@@ -585,10 +591,6 @@ class ArtistScreen(ModalScreen[None]):
         width: 100%;
         margin-right: 1;
     }
-    ArtistScreen #esc {
-        dock: top;
-        margin: 1 0;
-    }
     """
     BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel"),
@@ -601,7 +603,7 @@ class ArtistScreen(ModalScreen[None]):
         self.artist: Artist | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static("[@click=app.pop_screen]< (Esc)[/]", id="esc")
+        yield EscButton()
         with Container(id="box"):
             if self.artist is None:
                 return
@@ -615,27 +617,25 @@ class ArtistScreen(ModalScreen[None]):
                     for album in self.artist.albums:
                         if album.songs:
                             yield Collapsible(
-                                ExtendedListView(*[SongItem(song) for song in album.songs], initial_index=None),
+                                SongListView(*[SongItem(song) for song in album.songs], initial_index=None),
                                 title=f"{album.format_name(romaji_first=self.romaji_first)}\n{len(album.songs)} Songs",
                             )
                 if self.artist.songs_without_album:
                     yield Collapsible(
-                        ExtendedListView(
-                            *[SongItem(song) for song in self.artist.songs_without_album], initial_index=None
-                        ),
+                        SongListView(*[SongItem(song) for song in self.artist.songs_without_album], initial_index=None),
                         title=f"- No album -\n{len(self.artist.songs_without_album)} Songs",
                     )
 
-    @on(ExtendedListView.SongSelected)
-    async def song_selected(self, event: ExtendedListView.SongSelected) -> None:
+    @on(SongListView.SongSelected)
+    async def song_selected(self, event: SongListView.SongSelected) -> None:
         client = ListenClient.get_instance()
         favorited = False
         if client.logged_in:
             favorited = await client.check_favorite(event.song.id)
-        self.app.push_screen(SongScreen(event.song, favorited=favorited))
+        self.app.push_screen(SongScreen(event.song.id, favorited=favorited))
 
-    @on(ExtendedListView.ArtistSelected)
-    async def artist_selected(self, event: ExtendedListView.ArtistSelected) -> None:
+    @on(SongListView.ArtistSelected)
+    async def artist_selected(self, event: SongListView.ArtistSelected) -> None:
         if event.artist == self.artist:
             return
         self.app.push_screen(ArtistScreen(event.artist.id))
@@ -646,11 +646,11 @@ class ArtistScreen(ModalScreen[None]):
             self.scroll_to_widget(event.item, center=True)
 
     async def on_mount(self) -> None:
+        self.query_one("#box", Container).loading = True
         self.fetch_artist()
 
     @work
     async def fetch_artist(self) -> None:
-        self.query_one("#box", Container).loading = True
         client = ListenClient.get_instance()
         artist = await client.artist(self.artist_id)
         if artist is None:
@@ -746,3 +746,15 @@ class TestScreen(ModalScreen[None]):
 
     def on_click(self, event: events.Click) -> None:
         self.dismiss()
+
+
+class EscButton(Static):
+    DEFAULT_CSS = """
+    EscButton {
+        dock: top;
+        margin: 1 0;
+    }
+    """
+
+    def __init__(self) -> None:
+        super().__init__("[@click=app.pop_screen]< (Esc)[/]", id="esc")
