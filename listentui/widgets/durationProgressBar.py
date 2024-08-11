@@ -64,24 +64,26 @@ class DurationProgressBar(Widget):
         self.total = total
         self.pause_on_end = pause_on_end
         self.time_end = 0
+        self.progress_bar = ProgressBar(show_eta=False, show_percentage=False)
+        self.progress_label = _DurationCompleteLabel()
 
     def compose(self) -> ComposeResult:
         with Horizontal():
-            yield ProgressBar(show_eta=False, show_percentage=False)
-            yield _DurationCompleteLabel()
+            yield self.progress_bar
+            yield self.progress_label
 
     def on_mount(self) -> None:
-        self.query_one(_DurationCompleteLabel).current = self.current
-        self.query_one(_DurationCompleteLabel).total = self.total
-        self.query_one(ProgressBar).update(total=self.total if self.total != 0 else None, progress=self.current)
+        self.progress_label.current = self.current
+        self.progress_label.total = self.total
+        self.progress_bar.update(total=self.total if self.total != 0 else None, progress=self.current)
 
     def _update_progress(self) -> None:
         if self.total != 0 and self.pause_on_end and self.current >= self.total:
             self.timer.pause()
             return
         self.current += 1
-        self.query_one(ProgressBar).advance(1)
-        self.query_one(_DurationCompleteLabel).current = self.current
+        self.progress_bar.advance(1)
+        self.progress_label.current = self.current
 
     # def update_progress(self, data: ListenWsData):
     #     # TODO: what in the blackmagic fuck
@@ -96,10 +98,15 @@ class DurationProgressBar(Widget):
     def update_progress(self, song: Song) -> None:
         self.time_end = song.time_end
         self.current = 0
-        self.query_one(_DurationCompleteLabel).current = self.current
+        self.progress_label.current = self.current
         self.total = song.duration or 0
-        self.query_one(_DurationCompleteLabel).total = self.total
-        self.query_one(ProgressBar).update(total=self.total if self.total != 0 else None, progress=self.current)
+        self.progress_label.total = self.total
+        self.progress_bar.update(total=self.total if self.total != 0 else None, progress=self.current)
+
+    def update_total(self, total: int) -> None:
+        self.total = total
+        self.progress_label.total = total
+        self.progress_bar.update(total=total, progress=self.current)
 
     def pause(self) -> None:
         self.timer.pause()

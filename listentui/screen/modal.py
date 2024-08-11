@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, ClassVar, Optional
+from typing import Any, ClassVar, Optional, cast
 
 from rich.text import Text
 from textual import events, on, work
 from textual.app import ComposeResult
 from textual.binding import BindingType
 from textual.containers import Center, Container, Grid, Horizontal, VerticalScroll
+from textual.css.query import QueryError
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, Collapsible, Label, ListView, Markdown, Static
@@ -19,7 +20,7 @@ from listentui.listen.types import Album, AlbumID, Artist, ArtistID, Song, SongI
 from listentui.utilities import format_time_since
 from listentui.widgets.buttons import StaticButton, ToggleButton
 from listentui.widgets.durationProgressBar import DurationProgressBar
-from listentui.widgets.mpvThread import MPVThread
+from listentui.widgets.mpvThread import MPVThread, PreviewStatus, PreviewType
 from listentui.widgets.scrollableLabel import ScrollableLabel
 from listentui.widgets.songListView import (
     SongItem,
@@ -300,45 +301,57 @@ class SongScreen(ModalScreen[bool]):
 
     def action_cancel(self) -> None:
         if MPVThread.instance is not None:
-            MPVThread.instance.terminate_preview()
+            self.run_worker(MPVThread.instance.terminate_preview, thread=True)
         self.dismiss(self.is_favorited)
 
-    # @work(group="preview")
-    # async def _on_play(self) -> None:
-    #     self.query_one(DurationProgressBar).total = 15
-    #     self.query_one(DurationProgressBar).reset()
-    #     self.query_one(DurationProgressBar).resume()
+    @on(StaticButton.Pressed, "#preview")
+    def preview(self) -> None:
+        song = cast(Song, self.song)
+        if not song.snippet:
+            self.notify("No snippet to preview", severity="warning", title="Preview")
+            return
+        self.query_one("#preview", StaticButton).disabled = True
+        MPVThread.preview(self.handle_preview_status, song.snippet, self.app)
 
-    # @work(group="preview")
-    # async def _on_error(self) -> None:
-    #     self.notify("Unable to preview song :(", severity="error", title="Preview")
-
-    # @work(group="preview")
-    # async def _on_finish(self) -> None:
-    #     self.query_one("#preview", StaticButton).disabled = False
-
-    # # @on(StaticButton.Pressed, "#preview")
-    # # def preview(self) -> None:
-    # #     if not self.song.snippet:
-    # #         self.notify("No snippet to preview", severity="warning", title="Preview")
-    # #         return
-    # #     self.query_one("#preview", StaticButton).disabled = True
-    # #     self.player.preview(self.song.snippet, self._on_play, self._on_error, self._on_finish)
+    def handle_preview_status(self, data: PreviewStatus):  # noqa: PLR0911
+        self.log.debug(data)
+        try:
+            progress = self.query_one(DurationProgressBar)
+        except QueryError:
+            return
+        if data.state == PreviewType.LOCKED:
+            self.notify("Cannot preview two songs at the same time", title="Preview", severity="warning")
+            return
+        if data.state == PreviewType.UNABLE:
+            self.notify("Unable to play preview :(", title="Preview", severity="warning")
+            return
+        if data.state == PreviewType.PLAYING:
+            progress.reset()
+            progress.resume()
+            return
+        if data.state == PreviewType.DATA:
+            cache = cast(MPVThread.DemuxerCacheState, data.other)
+            progress.update_total(round(cache.cache_end))
+            return
+        if data.state == PreviewType.DONE:
+            self.query_one("#preview", StaticButton).disabled = False
+            return
+        if data.state == PreviewType.ERROR:
+            self.notify("An error has occured", title="Preview", severity="warning")
+            return
 
     @on(ToggleButton.Pressed, "#favorite")
     async def favorite(self) -> None:
-        if self.song is None:
-            raise Exception("Song cannot be None")
+        song = cast(Song, self.song)
         self.is_favorited = not self.is_favorited
         client = ListenClient.get_instance()
-        await client.favorite_song(self.song.id)
+        await client.favorite_song(song.id)
 
     @on(StaticButton.Pressed, "#request")
     async def request(self) -> None:
-        if self.song is None:
-            raise Exception("Song cannot be None")
+        song = cast(Song, self.song)
         client = ListenClient.get_instance()
-        res: Song | RequestError = await client.request_song(self.song.id, exception_on_error=False)
+        res: Song | RequestError = await client.request_song(song.id, exception_on_error=False)
         if isinstance(res, Song):
             title = res.format_title(romaji_first=self.romaji_first)
             artist = res.format_artists(romaji_first=self.romaji_first)
@@ -765,4 +778,4 @@ class EscButton(Static):
     """
 
     def __init__(self) -> None:
-        super().__init__("[@click=app.pop_screen]< (Esc)[/]", id="esc")
+        super().__init__("[@click=screen.cancel]< (Esc)[/]", id="esc")

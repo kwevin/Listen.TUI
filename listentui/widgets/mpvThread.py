@@ -1,20 +1,44 @@
 # pyright: reportUnknownMemberType=false, reportMissingTypeStubs=false
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from logging import DEBUG, INFO, WARNING, getLogger
 from threading import Lock, Thread
 from time import sleep
-from typing import Any, Self, Type
+from typing import Any, Callable, Self, Type
 
 from mpv import MPV, MpvEvent, MpvEventEndFile, ShutdownError
-from rich.repr import RichReprResult
+from rich.repr import Result, RichReprResult
+from textual.app import App
 from textual.message import Message
 from textual.widget import Widget
 
 from listentui.data.config import Config
+
+_pv_lock = Lock()
+
+
+class PreviewType(Enum):
+    UNABLE = 1
+    ERROR = 2
+    LOCKED = 3
+    PLAYING = 4
+    FINISHED = 5
+    DATA = 6
+    DONE = 7
+
+
+class PreviewStatus:
+    def __init__(self, state: PreviewType, other: Any = None) -> None:
+        self.state = state
+        self.other = other
+
+    def __rich_repr__(self) -> Result:
+        yield self.state
+        yield self.other
 
 
 class MPVWatcher(Thread):
@@ -32,7 +56,11 @@ class MPVWatcher(Thread):
     def run(self) -> None:
         while True:
             if not self.is_player_alive():
-                self._log.debug("Player is not alive, idling...")
+                sleep(1)
+                self._log.debug("Player is not alive, sleeping...")
+                continue
+            if self.player.is_restarting():
+                self._log.debug("Player is currently restarting...")
                 sleep(1)
                 continue
             if self.is_not_playing():
@@ -42,14 +70,14 @@ class MPVWatcher(Thread):
             continue
 
     def is_player_alive(self) -> bool:
-        return self.player.player.core_shutdown
+        return not self.player.player.core_shutdown
 
     def is_not_playing(self) -> bool:
         return bool(self.player.core_idle is True and self.player.paused is False)
 
     def dispatch_restart(self) -> None:
+        self.retries += 1
         timeout = min(self.base_timeout + 5 * self.retries, self.timeout_cap)
-
         self._log.debug(
             f"Attempting restart: {self.retries}/{self.soft_retry_cap} max: {self.hard_retry_cap} current timeout: {timeout}"  # noqa: E501
         )
@@ -68,7 +96,6 @@ class MPVWatcher(Thread):
             self.retries = 0
             self.player.main.post_message(self.player.SuccessfulRestart())
         except TimeoutError:
-            self.retries += 1
             self.player.main.post_message(
                 self.player.FailedRestart(self.retries, timeout, self.soft_retry_cap, self.hard_retry_cap)
             )
@@ -76,6 +103,7 @@ class MPVWatcher(Thread):
 
 class MPVThread(Thread):
     instance: MPVThread | None = None
+    pv_player: MPV | None = None
 
     def __init__(self, main: Widget) -> None:
         super().__init__(name="MPVThread", daemon=True)
@@ -84,13 +112,12 @@ class MPVThread(Thread):
         self.player = MPV(ytdl=True, **self.get_options(), log_handler=self.log_handler)
         self.watcher = MPVWatcher(self)
         self.muted_volume = 0
-        self.pv_player: MPV | None = None
         self.cache: MPVThread.DemuxerCacheState | None = None
         self._metadata: MPVThread.Metadata | None = None
         self._log = getLogger(__name__)
         self._idle_count = 0
-        self._pv_lock = Lock()
-        self._lock = Lock()
+        self._state_lock = Lock()
+        self._restart_lock = Lock()
 
     class Started(Message):
         def __init__(self) -> None:
@@ -142,6 +169,14 @@ class MPVThread(Thread):
 
             return cls(cache_end, cache_duration, fw_byte, total_bytes, seekable_start, seekable_end)
 
+        def __rich_repr__(self) -> Result:
+            yield self.cache_end
+            yield self.cache_duration
+            yield self.fw_byte
+            yield self.total_bytes
+            yield self.seekable_start
+            yield self.seekable_end
+
     @dataclass
     class Metadata(Message):
         start: datetime
@@ -167,18 +202,10 @@ class MPVThread(Thread):
             yield self.artist
             yield self.album
 
-    class PreviewType(Enum):
-        UNABLE = 1
-        ERROR = 2
-        LOCKED = 3
-        PLAYING = 4
-        FINISHED = 5
-
-    class PreviewStatus(Message):
-        def __init__(self, state: MPVThread.PreviewType, other: Any = None) -> None:
+    # This is definitely not future proof
+    class NewSong(Message):
+        def __init__(self) -> None:
             super().__init__()
-            self.state = state
-            self.other = other
 
     @property
     def paused(self) -> bool | None:
@@ -186,7 +213,8 @@ class MPVThread(Thread):
 
     @paused.setter
     def paused(self, state: bool):
-        self.player.pause = state
+        with contextlib.suppress(ShutdownError):
+            self.player.pause = state
 
     @property
     def core_idle(self) -> bool:
@@ -201,7 +229,8 @@ class MPVThread(Thread):
 
     @volume.setter
     def volume(self, volume: int):
-        self.player.volume = volume
+        with contextlib.suppress(ShutdownError):
+            self.player.volume = volume
 
     @property
     def ao_volume(self) -> float:
@@ -212,7 +241,8 @@ class MPVThread(Thread):
 
     @ao_volume.setter
     def ao_volume(self, volume: int):
-        self.player.ao_volume = volume
+        with contextlib.suppress(ShutdownError):
+            self.player.ao_volume = volume
 
     def _get_value(self, value: str, *args: Any) -> Any | None:
         try:
@@ -273,14 +303,16 @@ class MPVThread(Thread):
         self.player.observe_property("metadata", self._watch_metadata)
         self.player.observe_property("demuxer-cache-state", self._watch_cache)
 
-    def get_options(self) -> dict[str, Any]:
+    @staticmethod
+    def get_options() -> dict[str, Any]:
         mpv_options = Config.get_config().player.mpv_options.copy()
         mpv_options["volume"] = Config.get_config().persistant.volume
         if Config.get_config().player.dynamic_range_compression and not mpv_options.get("af"):
             mpv_options["af"] = "acompressor=ratio=4,loudnorm=I=-16:LRA=11:TP=-1.5"
         return mpv_options
 
-    def log_handler(self, loglevel: str, component: str, message: str):
+    @staticmethod
+    def log_handler(loglevel: str, component: str, message: str):
         if component == "display-tags":
             return
             # self._log.debug(component)
@@ -294,38 +326,50 @@ class MPVThread(Thread):
             case _:
                 level = DEBUG
 
-        # if "linearizing discontinuity" in message.lower():
-        #     self.main.post_message(self.NewSong())
-        self._log.log(level=level, msg=f"[{component}] {message}")
+        if "linearizing discontinuity" in message.lower() and MPVThread.instance:
+            MPVThread.instance.main.post_message(MPVThread.NewSong())
+        logger = getLogger(__name__)
+        logger.log(level=level, msg=f"[{component}] {message}")  # noqa: G004
 
     def restart(self, timeout: int = 60) -> None:
-        self._log.debug("soft restarting")
-        state = self.paused
-        self.player.play(self.stream_url)
-        self.player.wait_until_playing(timeout=timeout)
-        self.paused = state or False
+        with self._restart_lock:
+            self._log.debug("soft restarting")
+            state = self.paused
+            self.player.play(self.stream_url)
+            self.player.wait_until_playing(timeout=timeout)
+            self.paused = state or False
+            self.main.post_message(self.SuccessfulRestart())
 
-    def hard_restart(self, timeout: int = 60) -> None:
-        self._log.debug("hard restarting")
-        self.terminate()
-        self.player = MPV(**self.get_options())
-        self.start_mpv(timeout)
-
-    def play(self) -> None:
-        with self._lock:
-            self.paused = False
+    def safe_restart(self) -> None:
+        with contextlib.suppress(TimeoutError):
             self.restart()
 
+    def safe_hard_restart(self) -> None:
+        with contextlib.suppress(TimeoutError):
+            self.hard_restart()
+
+    def hard_restart(self, timeout: int = 60) -> None:
+        with self._restart_lock:
+            self._log.debug("hard restarting")
+            self.terminate()
+            self.player = MPV(**self.get_options())
+            self.start_mpv(timeout)
+
+    def is_restarting(self) -> bool:
+        return self._restart_lock.locked()
+
+    def play(self) -> None:
+        self.paused = False
+        self.restart()
+
     def pause(self) -> None:
-        with self._lock:
-            self.paused = True
+        self.paused = True
 
     def play_pause(self) -> None:
-        with self._lock:
-            if self.paused:
-                self.play()
-            else:
-                self.pause()
+        if self.paused:
+            self.play()
+        else:
+            self.pause()
 
     def set_volume(self, volume: int) -> None:
         self.volume = volume
@@ -354,50 +398,72 @@ class MPVThread(Thread):
         self.player.terminate()
         MPVThread.instance = None
 
-    def terminate_preview(self) -> None:
-        pass
+    @staticmethod
+    def terminate_preview() -> None:
+        if MPVThread.pv_player:
+            MPVThread.pv_player.terminate()
 
-    def preview(
-        self,
-        song_url: str,
-    ) -> None:
-        if self._pv_lock.locked():
-            self.main.post_message(self.PreviewStatus(self.PreviewType.LOCKED))
-            return
-        Thread(target=self._preview, args=(song_url)).start()
+        player = MPVThread.instance
+        if player and player.paused is not None and player.paused:
+            player.play()
 
+    @staticmethod
+    def preview(callback: Callable[[PreviewStatus], Any], song_url: str, app: App[Any]) -> None:
+        if _pv_lock.locked():
+            callback(PreviewStatus(PreviewType.LOCKED))
+        else:
+            Thread(target=MPVThread._preview, args=(callback, song_url, app)).start()
+
+    @staticmethod
     def _preview(
-        self,
+        callback: Callable[[PreviewStatus], Any],
         song_url: str,
+        app: App[Any],
     ) -> None:
-        with self._pv_lock:
-            self.main.notify(f"got {song_url}")
+        with _pv_lock:
             final_url = f"https://cdn.listen.moe/snippets/{song_url}".strip()
-            self.pv_player = MPV(ytdl=True, **self.get_options(), log_handler=self.log_handler)
-            pv_data = None
+            options = MPVThread.get_options()
+            player = MPVThread.instance
+            if player and player.volume and player.volume != 0:
+                options["volume"] = player.volume
+            MPVThread.pv_player = MPV(ytdl=True, **options, log_handler=MPVThread.log_handler)
+            pv_player = MPVThread.pv_player
 
-            @self.pv_player.event_callback("end-file")
+            @MPVThread.pv_player.event_callback("end-file")
             def check(event: MpvEvent):  # type: ignore
-                if isinstance(event.data, MpvEventEndFile) and event.data.reason == MpvEventEndFile.ERROR:
-                    self.main.post_message(self.PreviewStatus(self.PreviewType.UNABLE))
-                    self.pv_player.wait_for_shutdown()  # type: ignore
+                with contextlib.suppress(RuntimeError):
+                    if isinstance(event.data, MpvEventEndFile) and event.data.reason == MpvEventEndFile.ERROR:
+                        app.call_from_thread(callback, PreviewStatus(PreviewType.UNABLE))
+                        pv_player.wait_for_shutdown()  # type: ignore
 
-            def data(_: dict[str, Any], new_value: dict[str, Any]) -> None:
-                pv_data = self.DemuxerCacheState.from_cache_state(new_value)  # type: ignore # noqa: F841
+            def data(_: dict[str, Any], new_value: dict[str, Any] | None) -> None:
+                with contextlib.suppress(RuntimeError):
+                    if new_value is None:
+                        return
+                    pv_data = MPVThread.DemuxerCacheState.from_cache_state(new_value)
+                    app.call_from_thread(callback, PreviewStatus(PreviewType.DATA, pv_data))
+
+            def safe_play() -> None:
+                with contextlib.suppress(TimeoutError, ShutdownError):
+                    if player:
+                        player.play()
 
             try:
-                self.pv_player.observe_property("demuxer-cache-state", data)
-                self.pv_player.play(final_url)
-                # self.pv_player.wait_for_property("demuxer-cache-state", cond=bool)
-                self.pv_player.wait_until_playing()
-                self.pause()
-                self.main.post_message(self.PreviewStatus(self.PreviewType.PLAYING, pv_data))
-                self.pv_player.wait_for_playback()
-                self.play()
-                self.main.post_message(self.PreviewStatus(self.PreviewType.FINISHED))
-            except ShutdownError:
-                self.main.post_message(self.PreviewStatus(self.PreviewType.ERROR))
+                if player:
+                    player.pause()
+                pv_player.play(final_url)
+                pv_player.wait_for_property("demuxer-cache-state", cond=bool)
+                pv_player.observe_property("demuxer-cache-state", data)
+                pv_player.wait_until_playing()
+                app.call_from_thread(callback, PreviewStatus(PreviewType.PLAYING))
+                pv_player.wait_for_playback()
+                app.call_from_thread(callback, PreviewStatus(PreviewType.FINISHED))
+            except Exception:
+                with contextlib.suppress(RuntimeError):
+                    app.call_from_thread(callback, PreviewStatus(PreviewType.ERROR))
             finally:
-                self.pv_player.terminate()
-                if self.paused is not None and self.paused:
-                    self.play()
+                pv_player.terminate()
+                if player and player.paused is not None and player.paused:
+                    Thread(target=safe_play).start()
+        with contextlib.suppress(RuntimeError):
+            app.call_from_thread(callback, PreviewStatus(PreviewType.DONE))

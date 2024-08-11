@@ -66,13 +66,18 @@ class SongItem(ListItem):
             super().__init__()
             self.artist = artist
 
-    @on(ScrollableLabel.Clicked)
+    @on(ScrollableLabel.Clicked, ".item-artist")
     def scroll_label_clicked(self, event: ScrollableLabel.Clicked) -> None:
         event.stop()
         if self.song.artists is None:
             return
         artist = self.song.artists[event.index]
         self.post_message(self.SongLabelClicked(artist))
+
+    @on(ScrollableLabel.Clicked, ".item-title")
+    def scroll_title_clicked(self, event: ScrollableLabel.Clicked) -> None:
+        event.stop()
+        self.post_message(self.SongChildClicked(self))
 
     async def _on_click(self, _: events.Click) -> None:
         if any(label.mouse_hover for label in self.query(ScrollableLabel)):
@@ -167,6 +172,11 @@ class ButtonSongItem(ListItem):
             return
         artist = self.song.artists[event.index]
         self.post_message(self.SongLabelClicked(artist))
+
+    @on(ScrollableLabel.Clicked, ".item-title")
+    def scroll_title_clicked(self, event: ScrollableLabel.Clicked) -> None:
+        event.stop()
+        self.post_message(self.SongChildClicked(self))
 
     async def _on_click(self, _: events.Click) -> None:
         if any(label.mouse_hover for label in self.query(ScrollableLabel)):

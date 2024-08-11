@@ -1,28 +1,27 @@
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false
 import logging
-import sys
 from logging import Handler, Logger, LogRecord
+from queue import Queue
 from typing import Any, ClassVar
 
-from textual._context import active_app  # noqa: PLC2701
 from textual.binding import Binding, BindingType
-from textual.css.query import QueryError
 from textual.widgets import RichLog
-
-from listentui.data.config import Config
 
 
 class RichLogExtended(RichLog):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("c", "clear", "Clear"),
         Binding("d", "toggle_autoscroll", "Toggle Autoscroll"),
+        Binding("f", "empty_queue", "Refresh Logs"),
     ]
     data: ClassVar[list[str]] = []
+    queue: Queue[str] = Queue(maxsize=-1)
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, highlight=True, markup=True, wrap=True, **kwargs)
         for line in self.data:
             self.write(line, expand=True)
+        self.fetcher = self.set_interval(5, self.action_empty_queue)
 
     def action_clear(self) -> None:
         self.clear()
@@ -38,24 +37,16 @@ class RichLogExtended(RichLog):
         for line in self.data:
             self.write(line, expand=True)
 
+    def action_empty_queue(self) -> None:
+        while not RichLogExtended.queue.empty():
+            self.write(RichLogExtended.queue.get_nowait())
+
 
 class RichLogHandler(Handler):
     def emit(self, record: LogRecord) -> None:
         message = self.format(record)
-        try:
-            app = active_app.get()
-        except LookupError:
-            print(message, file=sys.stdout)
-        else:
-            app.log.logging(message)
-            # write to all RichLogExtended widgets
-            if Config.get_config().advance.stats_for_nerd:
-                try:
-                    RichLogExtended.data.append(self.format(record))
-                    for widget in app.query(RichLogExtended):
-                        widget.write(message)
-                except QueryError:
-                    pass
+        RichLogExtended.data.append(self.format(record))
+        RichLogExtended.queue.put_nowait(message)
 
 
 def get_logger() -> Logger:

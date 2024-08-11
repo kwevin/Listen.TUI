@@ -41,6 +41,12 @@ class Player(Widget):
                 padding-left: 2;
             }
         
+        
+            #retries {
+                color: red;
+            }
+
+
             #retries {
                 color: red;
             }
@@ -71,7 +77,7 @@ class Player(Widget):
         self.mpv_time = 0
         self.start_time = time.time()
         self.mpv_cache: MPVThread.DemuxerCacheState | None = None
-        self.can_update = True
+        # self.can_update = True
         self.set_interval(1, self.update_time_elapsed)
         self.set_interval(1, self.update_cache)
 
@@ -79,7 +85,7 @@ class Player(Widget):
         yield SongContainer()
         yield self.progress_bar
         with Horizontal(id="debug"):
-            yield Label(id="retries", classes="hidden")
+            yield Label(id="retries")
             yield Label(id="heartbeat")
             yield Label(id="delay")
             yield Label(id="cache")
@@ -97,7 +103,8 @@ class Player(Widget):
     def update_retries(self, retry: int, soft_cap: int, hard_cap: int, timeout: int) -> None:
         retries = self.query_one("#retries", Label)
         if retry > 0:
-            retries.update(f"{retry}/{soft_cap}|{hard_cap}")
+            retries.styles.visibility = "visibile"
+            retries.update(f"{retry}/{soft_cap} | {hard_cap}!")
             if retry > soft_cap:
                 retries.styles.color = "pink"
             elif retry > hard_cap:
@@ -142,6 +149,7 @@ class Player(Widget):
 
     @on(WebsocketUpdated)
     def update_websocket_time(self, _: None) -> None:
+        self.just_restarted = False
         self.websocket_time = time.time()
         self.update_delay()
 
@@ -149,27 +157,31 @@ class Player(Widget):
     def on_started(self) -> None:
         self.progress_bar.resume()
 
+    @on(MPVThread.NewSong)
     @on(MPVThread.Metadata)
-    def update_metadata(self, meta: MPVThread.Metadata) -> None:
-        meta.stop()
-        if self.retries == 0:
-            self.mpv_time = time.time()
-            self.update_delay()
-        self.progress_bar.resume()
-        self.can_update = True
+    def update_mpv_time(self) -> None:
+        self.mpv_time = time.time()
+        self.update_delay()
 
-    @work(group="wait_update", exclusive=True)
-    async def can_force_update(self, data: ListenWsData) -> None:
-        start = time.time()
-        max_wait_time = 8
-        if data.song.duration != 0:
-            while not self.can_update and time.time() - start < max_wait_time:
-                await asyncio.sleep(0.1)
-        else:
-            self.progress_bar.resume()
+    # self.progress_bar.resume()
+    # self.can_update = True
+
+    def update_container(self, data: ListenWsData) -> None:
         self.query_one(SongContainer).update_song(data.song)
         self.query_one(VanityBar).update_vanity(data)
-        self.can_update = False
+
+    # @work(group="wait_update", exclusive=True)
+    # async def can_force_update(self, data: ListenWsData) -> None:
+    #     start = time.time()
+    #     max_wait_time = 8
+    #     if data.song.duration != 0:
+    #         while not self.can_update and time.time() - start < max_wait_time:
+    #             await asyncio.sleep(0.1)
+    #     else:
+    #         self.progress_bar.resume()
+    #     self.query_one(SongContainer).update_song(data.song)
+    #     self.query_one(VanityBar).update_vanity(data)
+    #     self.can_update = False
 
     @on(MPVThread.FailedRestart)
     def player_failed_restart(self, event: MPVThread.FailedRestart) -> None:
@@ -185,40 +197,6 @@ class Player(Widget):
     def player_failed(self, event: MPVThread.Fail) -> None:
         self.app.exit("Player failed to connect / regain connection")
 
-    # @on(MPVThread.CoreIdle)
-    # def on_idle(self, state: MPVThread.CoreIdle) -> None:
-    #     state.stop()
-    #     idle = state.state
-
-    #     self._log.debug(f"{idle = }")
-
-    #     if idle is False and self.idle_lock is True:
-    #         self.retries = 0
-    #         self.idle_lock = False
-    #         self.workers.cancel_group(self, "MPV_Idle_Restarter")
-
-    #     if idle is True and self.player.paused is False and self.idle_lock is False:
-    #         self.idle_lock = True
-    #         self._start_idle_restarter()
-
-    # @work(group="MPV_Idle_Restarter", exclusive=True, thread=True)
-    # async def _start_idle_restarter(self) -> None:
-    #     count = 0
-    #     timeout = Config.get_config().player.timeout_restart
-    #     while count < timeout:
-    #         count += 1
-    #         await asyncio.sleep(1)
-
-    #     while self.idle_lock is True:
-    #         if self.retries < self.soft_cap:
-    #             self.player.restart()
-    #         else:
-    #             self.player.hard_restart()
-
-    #         self.retries += 1
-    #         await asyncio.sleep(10)
-    #     self.retries = 0
-
     @work(exclusive=True, group="websocket")
     async def websocket(self) -> None:
         last_heartbeat: datetime = datetime.now()
@@ -231,9 +209,9 @@ class Player(Widget):
                             self.ws_data = ListenWsData.from_data(res)
                             # self._log.info(pretty_repr(self.ws_data))
                             self.post_message(self.WebsocketUpdated(self.ws_data))
-                            self.progress_bar.pause()
+                            # self.progress_bar.pause()
                             self.progress_bar.update_progress(self.ws_data.song)
-                            self.can_force_update(self.ws_data)
+                            self.update_container(self.ws_data)
                         case 0:
                             self.loading = False
                             self.post_message(self.WebsocketStatus(True, last_heartbeat))

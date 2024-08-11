@@ -5,11 +5,12 @@ from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.reactive import var
-from textual.widgets import Footer, Static
+from textual.widgets import Static
 
 from listentui.data.config import Config
 from listentui.listen.client import ListenClient
 from listentui.pages.base import BasePage
+from listentui.widgets.mpvThread import MPVThread
 from listentui.widgets.player import Player
 from listentui.widgets.songListView import ToggleButton
 
@@ -32,7 +33,7 @@ class VolumeButton(ToggleButton):
         self.app.query_one(Player).player.set_volume(0) if new else self.app.query_one(Player).player.set_volume(
             self.volume
         )
-        self.app.query_one(Footer).refresh_bindings()
+        self.refresh_bindings()
 
     def validate_volume(self, volume: int) -> int:
         min_volume = 0
@@ -107,11 +108,12 @@ class HomePage(BasePage):
         Binding("down,j", "volume_down", "Volume Down"),
         Binding("m", "mute", "Toggle Mute"),
         Binding("r", "soft_restart", "Restart Player"),
-        Binding("ctrl+shift+r", "hard_restart", show=False),
+        Binding("ctrl+r", "hard_restart", show=False),
     ]
 
     def __init__(self) -> None:
         super().__init__()
+        self.started = False
         self.player = Player()
 
     def compose(self) -> ComposeResult:
@@ -124,20 +126,43 @@ class HomePage(BasePage):
                 yield VolumeButton(id="vol")
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if self.started is False:
+            return None
         if action == "play_pause":
-            return True if self.player.player.paused is not None else None
+            return True if not self.query_one("#playpause", ToggleButton).disabled else None
         if action == "favorite":
             return ListenClient.get_instance().logged_in
         if action in {"volume_up", "volume_down"}:
             return None if self.query_one("#vol", VolumeButton).muted else True
+        if action == "soft_restart":
+            return None if self.player.player.is_restarting() else True
         return True
+
+    def on_mount(self) -> None:
+        self.query_one("#playpause", ToggleButton).disabled = True
+        self.query_one("#vol", VolumeButton).disabled = True
 
     @on(ToggleButton.Pressed, "#playpause")
     def action_play_pause(self) -> None:
         if self.player.player.paused is None:
             return
+        if self.player.player.paused is True:
+            self.query_one("#playpause", ToggleButton).disabled = True
         self.run_worker(self.player.player.play_pause, thread=True)
         self.query_one("#playpause", ToggleButton).set_toggle_state(not self.player.player.paused)
+        self.refresh_bindings()
+
+    @on(MPVThread.Started)
+    def enable_functionality(self) -> None:
+        self.started = True
+        self.query_one("#playpause", ToggleButton).disabled = False
+        self.query_one("#vol", VolumeButton).disabled = False
+        self.refresh_bindings()
+
+    @on(MPVThread.SuccessfulRestart)
+    def enable_button(self) -> None:
+        self.query_one("#playpause", ToggleButton).disabled = False
+        self.refresh_bindings()
 
     async def action_favorite(self) -> None:
         if not self.player.ws_data:
@@ -157,7 +182,11 @@ class HomePage(BasePage):
         self.query_one(VolumeButton).toggle()
 
     def action_soft_restart(self) -> None:
-        self.run_worker(self.player.player.restart, thread=True)
+        if not self.player.player.is_restarting():
+            self.run_worker(self.player.player.safe_restart, thread=True)
+        self.refresh_bindings()
 
     def action_hard_restart(self) -> None:
-        self.run_worker(self.player.player.hard_restart, thread=True)
+        if not self.player.player.is_restarting():
+            self.run_worker(self.player.player.safe_hard_restart, thread=True)
+        self.refresh_bindings()
