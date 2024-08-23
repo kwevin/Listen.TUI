@@ -4,7 +4,7 @@ from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Label, Static
 
-from listentui.listen.types import Event, ListenWsData, Requester
+from listentui.listen.interface import Event, ListenWsData, Requester
 
 
 class VanityBar(Widget):
@@ -24,19 +24,18 @@ class VanityBar(Widget):
 
         #requester {
             height: 1;
-            padding-right: 1;
         }
         
-        &> Center {
+        & Center {
             dock: top;
         }
         
-        &> Static {
+        & Static {
             width: 1fr;
             height: 1;
         }
 
-        &> Horizontal {
+        & Horizontal {
             height: auto;
         }
     }

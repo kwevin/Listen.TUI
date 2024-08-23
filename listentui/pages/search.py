@@ -1,21 +1,21 @@
 # import webbrowser
 from random import choice as random_choice
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Center, Horizontal
 from textual.reactive import var
+from textual.types import NoSelection
 from textual.validation import Function
 from textual.widgets import Input, Label, Select
 
-from listentui.data.config import Config
 from listentui.listen.client import ListenClient, RequestError
-from listentui.listen.types import Song, SongID
+from listentui.listen.interface import Song, SongID
 from listentui.pages.base import BasePage
-from listentui.screen.modal import ArtistScreen, SongScreen
-from listentui.widgets.songListView import ButtonSongItem, SongListView
+from listentui.screen.modal import AlbumScreen, ArtistScreen, SongScreen, SourceScreen
+from listentui.widgets.songListView import AdvSongItem, SongListView
 
 
 class SearchPage(BasePage):
@@ -47,11 +47,11 @@ class SearchPage(BasePage):
         }
     }
     """
-    search_result: var[dict[SongID, Song]] = var({}, init=False)
+    search_result: var[dict[SongID, Song]] = var({}, init=False, always_update=True)
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("shift+q", "random", "Request A Random Searched Song"),
-        Binding("shift+r", "random_favorited", "Request A Random Favorited Song"),
-        Binding("shift+f", "toggle_filter", "Toggle Favorite Filter"),
+        Binding("ctrl+q", "random", "Request A Random Searched Song"),
+        Binding("ctrl+r", "random_favorited", "Request A Random Favorited Song"),
+        Binding("ctrl+t", "toggle_filter", "Toggle Favorite Filter"),
     ]
 
     def __init__(self) -> None:
@@ -66,6 +66,7 @@ class SearchPage(BasePage):
         )
         self.filter: Select[bool] = Select([("Favorited Only", True)], allow_blank=True, id="sfilter")
         self.search_result_copy: list[SongID] = []
+        self.favorited: dict[SongID, bool] = {}
 
     def compose(self) -> ComposeResult:
         with Horizontal():
@@ -85,10 +86,11 @@ class SearchPage(BasePage):
 
     def action_toggle_filter(self) -> None:
         if self.filter.is_blank():
-            self.filter.set_options([("Favorited Only", True)])
+            self.filter.value = True
         else:
             self.filter.clear()
 
+    @work
     async def action_random(self) -> None:
         if len(self.search_result_copy) > 0:
             random = random_choice(self.search_result_copy)
@@ -99,8 +101,8 @@ class SearchPage(BasePage):
 
         res: Song | RequestError = await self.client.request_song(random, exception_on_error=False)
         if isinstance(res, Song):
-            title = res.format_title(romaji_first=Config.get_config().display.romaji_first)
-            artist = res.format_artists(romaji_first=Config.get_config().display.romaji_first)
+            title = res.format_title(romaji_first=self.config.display.romaji_first)
+            artist = res.format_artists(romaji_first=self.config.display.romaji_first)
             self.notify(
                 f"{title}" + f" by [red]{artist}[/]" if artist else "",
                 title="Sent to queue",
@@ -110,9 +112,10 @@ class SearchPage(BasePage):
         else:
             self.notify("No more songs to request!", severity="warning")
 
+    @work
     async def action_random_favorited(self) -> None:
         res: Song | RequestError = await self.client.request_random_favorite(exception_on_error=False)
-        romaji_first = Config.get_config().display.romaji_first
+        romaji_first = self.config.display.romaji_first
         if isinstance(res, Song):
             title = res.format_title(romaji_first=romaji_first)
             artist = res.format_artists(romaji_first=romaji_first)
@@ -125,13 +128,15 @@ class SearchPage(BasePage):
 
     @work
     async def watch_search_result(self, new_value: dict[SongID, Song]) -> None:
-        self.list_view.clear()
-        favorited: dict[SongID, bool] = {}
-        if self.client.logged_in:
-            favorited = await self.client.check_favorite(new_value.keys())
-        self.list_view.extend(
-            ButtonSongItem(song, favorited=favorited.get(song.id, False)) for song in new_value.values()
-        )
+        await self.list_view.clear()
+        self.favorited = {}
+        filtr: Select[bool] = self.query_one("#sfilter", Select)
+        if self.client.logged_in and filtr.is_blank():
+            self.favorited = await self.client.check_favorite([*new_value.keys()])
+        if new_value.keys():
+            await self.list_view.extend(
+                AdvSongItem(song, self.favorited.get(song.id, not filtr.is_blank())) for song in new_value.values()
+            )
         self.query_one("#counter", Label).update(
             f"{len(new_value.keys())} Results Found" if len(new_value.keys()) > 0 else "No Result Found"
         )
@@ -151,16 +156,25 @@ class SearchPage(BasePage):
         if event.value == -1:
             self.search_amount = None
         else:
-            self.search_amount = int(event.value) if isinstance(event.value, int) else 50
+            self.search_amount = cast(int, event.value)
+
+        if not self.query_one("#sfilter", Select).is_blank():
+            self.search(True)
+        else:
             self.search()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.validation_result and event.validation_result.is_valid:
             self.search(True)
-        else:
-            return
 
     @on(Select.Changed, "#sfilter")
+    def on_filter_changed(self, event: Select.Changed) -> None:
+        if isinstance(event.value, NoSelection) and not self.query_one(Input).value:
+            self.list_view.loading = True
+            self.search_result = self.default_songs
+        else:
+            self.search(True)
+
     @work
     async def search(self, valid: bool = False) -> None:
         inp = self.query_one(Input)
@@ -171,6 +185,7 @@ class SearchPage(BasePage):
                 await self.client.search(search, self.search_amount, favorite_only=not self.filter.is_blank())
             )
             return
+
         validation = inp.validate(search)
         if validation and validation.is_valid:
             self.list_view.loading = True
@@ -179,12 +194,25 @@ class SearchPage(BasePage):
             )
 
     @on(SongListView.SongSelected)
+    @work
     async def song_selected(self, event: SongListView.SongSelected) -> None:
-        self.app.push_screen(SongScreen(event.song.id))
+        filtr: Select[bool] = self.query_one("#sfilter", Select)
+        favorited_status = await self.app.push_screen_wait(
+            SongScreen(event.song.id, self.favorited.get(event.song.id, not filtr.is_blank() or False))
+        )
+        self.query_one(f"#_song-{event.song.id}", AdvSongItem).set_favorited_state(favorited_status)
 
     @on(SongListView.ArtistSelected)
     async def artist_selected(self, event: SongListView.ArtistSelected) -> None:
         self.app.push_screen(ArtistScreen(event.artist.id))
+
+    @on(SongListView.SourceSelected)
+    async def source_selected(self, event: SongListView.SourceSelected) -> None:
+        self.app.push_screen(SourceScreen(event.source.id))
+
+    @on(SongListView.AlbumSelected)
+    async def album_selected(self, event: SongListView.AlbumSelected) -> None:
+        self.app.push_screen(AlbumScreen(event.album.id))
 
     def to_dict(self, songs: list[Song]) -> dict[SongID, Song]:
         return {song.id: song for song in songs}

@@ -16,9 +16,11 @@ markdownify = "^0.12.1"
 textual = {extras = ["syntax"], version = "^0.76.0"}
 gql = {extras = ["aiohttps"], version = "^3.5.0"}
 xdg = "^6.0.0"
+frozendict = "^2.4.4"
+async-lru = "^2.0.4"
 
 [tool.poetry.group.dev.dependencies]
-ruff = "^0.4.8"
+ruff = "^0.5.7"
 pyinstaller = "^6.2.0"
 Nuitka = "^1.9.3"
 textual-dev = "^1.5.1"

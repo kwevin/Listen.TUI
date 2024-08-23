@@ -14,28 +14,23 @@ class RichLogExtended(RichLog):
         Binding("d", "toggle_autoscroll", "Toggle Autoscroll"),
         Binding("f", "empty_queue", "Refresh Logs"),
     ]
-    data: ClassVar[list[str]] = []
     queue: Queue[str] = Queue(maxsize=-1)
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, highlight=True, markup=True, wrap=True, **kwargs)
-        for line in self.data:
-            self.write(line, expand=True)
+        super().__init__(*args, max_lines=1000, highlight=True, markup=True, wrap=True, **kwargs)
         self.fetcher = self.set_interval(5, self.action_empty_queue)
 
     def action_clear(self) -> None:
         self.clear()
-        RichLogExtended.data = []
 
     def action_toggle_autoscroll(self) -> None:
         self.auto_scroll = not self.auto_scroll
-        self.scroll_end()
-        self.notify(f"Autoscroll {'enable' if self.auto_scroll else 'disable'}")
+        if self.auto_scroll:
+            self.scroll_end()
+        self.notify(f"Autoscroll {'enabled' if self.auto_scroll else 'disabled'}")
 
     def on_resize(self) -> None:
-        self.clear()
-        for line in self.data:
-            self.write(line, expand=True)
+        self.action_empty_queue()
 
     def action_empty_queue(self) -> None:
         while not RichLogExtended.queue.empty():
@@ -45,7 +40,6 @@ class RichLogExtended(RichLog):
 class RichLogHandler(Handler):
     def emit(self, record: LogRecord) -> None:
         message = self.format(record)
-        RichLogExtended.data.append(self.format(record))
         RichLogExtended.queue.put_nowait(message)
 
 

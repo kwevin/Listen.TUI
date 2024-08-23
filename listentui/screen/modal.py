@@ -16,7 +16,7 @@ from listentui.data.config import Config
 from listentui.data.theme import Theme
 from listentui.listen import ListenClient
 from listentui.listen.client import RequestError
-from listentui.listen.types import Album, AlbumID, Artist, ArtistID, Song, SongID, Source
+from listentui.listen.interface import Album, AlbumID, Artist, ArtistID, Song, SongID, Source, SourceID
 from listentui.utilities import format_time_since
 from listentui.widgets.buttons import StaticButton, ToggleButton
 from listentui.widgets.durationProgressBar import DurationProgressBar
@@ -35,23 +35,15 @@ class SourceScreen(ModalScreen[None]):
         background: $background;
     }
     SourceScreen #box {
-        width: 124;
-        max-height: 30;
-        height: auto;
+        width: 100%;
+        margin: 4 4 6 4;
+        height: 100%;
         border: thick $background 80%;
         background: $surface;
     }
     SourceScreen Center {
         margin-top: 1;
     }
-    # SourceScreen Horizontal {
-    #     width: 100%;
-    #     height: auto;
-    #     margin-bottom: 1;
-    # }
-    # SourceScreen Horizontal Label {
-    #     margin-right: 1;
-    # }
     SourceScreen Markdown {
         margin: 1 2 0 0;
     }
@@ -65,28 +57,32 @@ class SourceScreen(ModalScreen[None]):
     SourceScreen SongListView {
         margin-right: 2;
     }
+    SourceScreen CollapsibleTitle {
+        width: 100%;
+        margin-right: 1;
+    }
     """
     BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel"),
     ]
 
-    def __init__(self, source: Source):
+    def __init__(self, source_id: SourceID):
         super().__init__()
         self.romaji_first = Config.get_config().display.romaji_first
-        self.source = source
-        self.player = MPVThread.instance
-        if self.player is None:
-            raise Exception("No running player")
-        self._description_widget = (
-            Collapsible(Markdown(self.source.description_to_markdown()), title="Description")
-            if self.source.description
-            else Label("- No description -")
-        )
+        self.source_id = source_id
+        self.source: Source | None = None
 
     def compose(self) -> ComposeResult:
+        yield EscButton()
         with Container(id="box"):
+            if self.source is None:
+                return
             yield Center(Label(id="name"))
-            yield self._description_widget
+            yield (
+                Collapsible(Markdown(self.source.description_to_markdown()), title="Description")
+                if self.source.description
+                else Label("- No description -")
+            )
             yield Label(id="links")
             with VerticalScroll():
                 if self.source.songs:
@@ -127,16 +123,24 @@ class SourceScreen(ModalScreen[None]):
     async def song_selected(self, event: SongListView.SongSelected) -> None:
         self.app.push_screen(SongScreen(event.song.id))
 
+    @on(SongListView.ArtistSelected)
+    async def artist_selected(self, event: SongListView.ArtistSelected) -> None:
+        self.app.push_screen(ArtistScreen(event.artist.id))
+
     @on(ListView.Highlighted)
     def child_highlighed(self, event: ListView.Highlighted) -> None:
         if event.item:
             self.scroll_to_widget(event.item, center=True)
 
+    @work
     async def on_mount(self) -> None:
+        self.query_one("#box", Container).loading = True
+        self.source = await ListenClient.get_instance().source(self.source_id)
+        await self.recompose()
+        self.query_one("#box", Container).loading = False
+        if self.source is None:
+            raise Exception("source cannot be None")
         self.query_one("#name", Label).update(self.source.format_name(romaji_first=self.romaji_first) or "")
-        # self.query_one("#source-description", Markdown).update(
-        #     f"{self.source.description_to_markdown() or '- No description -'}"
-        # )
         self.query_one("#links", Label).update(
             f"{self.source.format_socials(sep=' ') or '- No links for this source yet - '}"
         )
@@ -202,11 +206,12 @@ class SongScreen(ModalScreen[bool]):
         ("escape", "cancel"),
     ]
 
-    def __init__(self, song_id: SongID, favorited: bool = False):
+    def __init__(self, song_id: SongID, favorited: bool | None = None):
         super().__init__()
         self.song_id = song_id
         self.song: Song | None = None
-        self.is_favorited = favorited
+        self.got_favorited = favorited
+        self.is_favorited = False
         self.romaji_first = Config.get_config().display.romaji_first
 
     def compose(self) -> ComposeResult:
@@ -214,6 +219,7 @@ class SongScreen(ModalScreen[bool]):
         with Grid():
             if self.song is None:
                 return
+
             yield Label("Track/Artist")
             yield Label("Album")
             yield Label("Source")
@@ -228,14 +234,18 @@ class SongScreen(ModalScreen[bool]):
                     id="artist",
                 ),
             )
+            album = self.song.format_album(romaji_first=self.romaji_first)
+            source = self.song.format_source(romaji_first=self.romaji_first)
             yield Container(
                 ScrollableLabel(
-                    Text.from_markup(self.song.format_album(romaji_first=self.romaji_first) or ""), id="album"
+                    Text.from_markup(f"[green]{album}[/]" if album else ""),
+                    id="album",
                 )
             )
             yield Container(
                 ScrollableLabel(
-                    Text.from_markup(self.song.format_source(romaji_first=self.romaji_first) or ""), id="source"
+                    Text.from_markup(f"[cyan]{source}[/]" if source else ""),
+                    id="source",
                 )
             )
             yield Label(f"Duration: {self.song.duration}", id="duration")
@@ -247,12 +257,11 @@ class SongScreen(ModalScreen[bool]):
             with Horizontal(id="horizontal"):
                 yield StaticButton("Preview", id="preview")
                 yield DurationProgressBar(stop=True, total=0, pause_on_end=True)
-                yield ToggleButton("Favorite", check_user=True, hidden=True, id="favorite")
+                yield ToggleButton("Favorite", "Favorited", check_user=True, hidden=True, id="favorite")
                 yield StaticButton("Request", check_user=True, hidden=True, id="request")
 
-    async def on_scrollable_label_clicked(self, event: ScrollableLabel.Clicked) -> None:  # noqa: PLR0911
+    async def on_scrollable_label_clicked(self, event: ScrollableLabel.Clicked) -> None:
         container_id = event.widget.id
-        client = ListenClient.get_instance()
         if not container_id:
             return
         if not self.song:
@@ -268,17 +277,11 @@ class SongScreen(ModalScreen[bool]):
             case "album":
                 if not self.song.album:
                     return
-                album = await client.album(self.song.album.id)
-                if not album:
-                    return
-                self.app.push_screen(AlbumScreen(album))
+                self.app.push_screen(AlbumScreen(self.song.album.id))
             case "source":
                 if not self.song.source:
                     return
-                source = await client.source(self.song.source.id)
-                if not source:
-                    return
-                self.app.push_screen(SourceScreen(source))
+                self.app.push_screen(SourceScreen(self.song.source.id))
             case _:
                 return
 
@@ -294,8 +297,10 @@ class SongScreen(ModalScreen[bool]):
             raise Exception("Song cannot be None")
         self.song = song
         await self.recompose()
-        if client.logged_in:
+        if client.logged_in and self.got_favorited is None:
             self.is_favorited: bool = await client.check_favorite(song.id) or False
+        if self.got_favorited is not None:
+            self.is_favorited = self.got_favorited
         self.query_one("#favorite", ToggleButton).set_toggle_state(self.is_favorited)
         self.query_one(Grid).loading = False
 
@@ -341,13 +346,16 @@ class SongScreen(ModalScreen[bool]):
             return
 
     @on(ToggleButton.Pressed, "#favorite")
+    @work
     async def favorite(self) -> None:
         song = cast(Song, self.song)
         self.is_favorited = not self.is_favorited
+        self.query_one("#favorite", ToggleButton).set_toggle_state(self.is_favorited)
         client = ListenClient.get_instance()
         await client.favorite_song(song.id)
 
     @on(StaticButton.Pressed, "#request")
+    @work
     async def request(self) -> None:
         song = cast(Song, self.song)
         client = ListenClient.get_instance()
@@ -490,9 +498,9 @@ class AlbumScreen(ModalScreen[None]):
         background: $background;
     }
     AlbumScreen #box {
-        width: 124;
-        max-height: 30;
-        height: auto;
+        width: 100%;
+        margin: 4 4 6 4;
+        height: 100%;
         border: thick $background 80%;
         background: $surface;
     }
@@ -526,21 +534,26 @@ class AlbumScreen(ModalScreen[None]):
         grid-rows: 5;
         height: auto;
     }
+    AlbumScreen CollapsibleTitle {
+        width: 100%;
+        margin-right: 1;
+    }
     """
     BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel"),
     ]
 
-    def __init__(self, album: Album):
+    def __init__(self, album_id: AlbumID):
         super().__init__()
         self.romaji_first = Config.get_config().display.romaji_first
-        self.album = album
-        self.player = MPVThread.instance
-        if self.player is None:
-            raise Exception("No running player")
+        self.album_id = album_id
+        self.album: Album | None = None
 
     def compose(self) -> ComposeResult:
+        yield EscButton()
         with Container(id="box"):
+            if self.album is None:
+                return
             yield Center(Label(id="name"))
             yield Label(id="links")
             with VerticalScroll():
@@ -556,12 +569,23 @@ class AlbumScreen(ModalScreen[None]):
     async def song_selected(self, event: SongListView.SongSelected) -> None:
         self.app.push_screen(SongScreen(event.song.id))
 
+    @on(SongListView.ArtistSelected)
+    async def artist_selected(self, event: SongListView.ArtistSelected) -> None:
+        self.app.push_screen(ArtistScreen(event.artist.id))
+
     @on(ListView.Highlighted)
     def child_highlighed(self, event: ListView.Highlighted) -> None:
         if event.item:
             self.scroll_to_widget(event.item, center=True)
 
+    @work
     async def on_mount(self) -> None:
+        self.query_one("#box", Container).loading = True
+        self.album = await ListenClient.get_instance().album(self.album_id)
+        if self.album is None:
+            raise Exception("album cannot be None")
+
+        await self.recompose()
         count = len(self.album.songs) if self.album.songs else 0
         self.query_one("#name", Label).update(
             f"{self.album.format_name(romaji_first=self.romaji_first)} - {count} Songs"
@@ -569,6 +593,7 @@ class AlbumScreen(ModalScreen[None]):
         self.query_one("#links", Label).update(
             f"{self.album.format_socials(sep=' ') or '- No links for this album yet -'}"
         )
+        self.query_one("#box", Container).loading = False
 
     def action_cancel(self) -> None:
         self.dismiss()

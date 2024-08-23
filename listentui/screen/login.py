@@ -89,6 +89,8 @@ class LoginScreen(Screen[bool]):
         else:
             client = ListenClient.get_instance()
 
+        await client.connect()
+
         user = client.current_user
         if user and user.token:
             config.persistant.token = user.token

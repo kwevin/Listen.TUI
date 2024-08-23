@@ -1,5 +1,5 @@
 from listentui.listen.client import ListenClient
-from listentui.listen.types import (
+from listentui.listen.interface import (
     Album,
     AlbumID,
     Artist,

@@ -1,7 +1,6 @@
 from typing import Any
 
 from rich.text import Text
-from textual.message import Message
 from textual.reactive import var
 from textual.widgets import Button
 
@@ -11,7 +10,7 @@ from listentui.listen import ListenClient
 class StaticButton(Button):
     DEFAULT_CSS = """
     StaticButton:disabled {
-        tint: black 80%;
+        tint: black 40%;
     }
     StaticButton.hidden {
         visibility: hidden;
@@ -44,11 +43,6 @@ class ToggleButton(StaticButton):
     """
     is_toggled: var[bool] = var(False, init=False)
 
-    class Toggled(Message):
-        def __init__(self, state: bool) -> None:
-            super().__init__()
-            self.state = state
-
     def __init__(
         self,
         label: str | Text | None = None,
@@ -73,11 +67,9 @@ class ToggleButton(StaticButton):
 
     def toggle_state(self) -> None:
         self.is_toggled = not self.is_toggled
-        self.post_message(self.Toggled(self.is_toggled))
 
     def set_toggle_state(self, state: bool) -> None:
         self.is_toggled = state
-        self.post_message(self.Toggled(self.is_toggled))
 
     def update_toggle_label(self, label: str | Text | None) -> None:
         self._toggled_label = label

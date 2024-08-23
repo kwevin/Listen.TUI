@@ -1,6 +1,6 @@
 from typing import ClassVar
 
-from textual import on
+from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
@@ -9,10 +9,11 @@ from textual.widgets import Static
 
 from listentui.data.config import Config
 from listentui.listen.client import ListenClient
+from listentui.listen.interface import ListenWsData
 from listentui.pages.base import BasePage
+from listentui.widgets.buttons import ToggleButton
 from listentui.widgets.mpvThread import MPVThread
 from listentui.widgets.player import Player
-from listentui.widgets.songListView import ToggleButton
 
 
 class VolumeButton(ToggleButton):
@@ -114,6 +115,7 @@ class HomePage(BasePage):
     def __init__(self) -> None:
         super().__init__()
         self.started = False
+        self.favorited = False
         self.player = Player()
 
     def compose(self) -> ComposeResult:
@@ -142,6 +144,8 @@ class HomePage(BasePage):
         self.query_one("#playpause", ToggleButton).disabled = True
         self.query_one("#vol", VolumeButton).disabled = True
 
+        self.query_one(Player).websocket_update.subscribe(self, self.get_song_favorited_status, immediate=True)  # type: ignore
+
     @on(ToggleButton.Pressed, "#playpause")
     def action_play_pause(self) -> None:
         if self.player.player.paused is None:
@@ -151,6 +155,25 @@ class HomePage(BasePage):
         self.run_worker(self.player.player.play_pause, thread=True)
         self.query_one("#playpause", ToggleButton).set_toggle_state(not self.player.player.paused)
         self.refresh_bindings()
+
+    @work
+    async def get_song_favorited_status(self, _: ListenWsData) -> None:
+        if self.player.ws_data is None:
+            return
+        client = ListenClient.get_instance()
+        if client.logged_in:
+            self.favorited = await client.check_favorite(self.player.ws_data.song.id)
+            self.query_one("#favorite", ToggleButton).set_toggle_state(self.favorited)
+
+    @on(ToggleButton.Pressed, "#favorite")
+    @work
+    async def action_favorite(self) -> None:
+        self.favorited = not self.favorited
+        self.query_one("#favorite", ToggleButton).set_toggle_state(self.favorited)
+        if self.player.ws_data is None:
+            return
+        client = ListenClient.get_instance()
+        await client.favorite_song(self.player.ws_data.song.id)
 
     @on(MPVThread.Started)
     def enable_functionality(self) -> None:
@@ -164,17 +187,12 @@ class HomePage(BasePage):
         self.query_one("#playpause", ToggleButton).disabled = False
         self.refresh_bindings()
 
-    async def action_favorite(self) -> None:
-        if not self.player.ws_data:
-            return
-        ListenClient.get_instance().favorite_song(self.player.ws_data.song.id)
-
     def action_volume_up(self) -> None:
-        self.player.player.raise_volume(5)
+        self.player.player.raise_volume(self.config.player.volume_step)
         self.query_one(VolumeButton).volume = self.player.player.volume
 
     def action_volume_down(self) -> None:
-        self.player.player.lower_volume(5)
+        self.player.player.lower_volume(self.config.player.volume_step)
         self.query_one(VolumeButton).volume = self.player.player.volume
 
     def action_mute(self) -> None:

@@ -7,7 +7,6 @@ from time import time
 from typing import Any, Literal, NewType, Optional, Self, Type, Union
 
 from markdownify import markdownify  # type: ignore
-from textual.widgets import Markdown  # type: ignore
 
 AlbumID = NewType("AlbumID", int)
 ArtistID = NewType("ArtistID", int)
@@ -253,9 +252,13 @@ class Source:
     def format_name(self, *, romaji_first: bool = True) -> str | None:
         return (self.name_romaji or self.name) if romaji_first else (self.name or self.name_romaji)
 
-    def format_socials(self, *, sep: str = ", ") -> str | None:
+    def format_socials(self, *, sep: str = ", ", use_app: bool = False) -> str | None:
         if not self.socials:
             return None
+        if use_app:
+            return f"{sep}".join(
+                [f"[@click=app.handle_url('{social.url}')]{social.name}[/]" for social in self.socials]
+            )
         return f"{sep}".join([f"[link={social.url}]{social.name}[/link]" for social in self.socials])
 
     def description_to_markdown(self) -> str | None:

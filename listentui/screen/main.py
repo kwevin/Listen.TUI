@@ -5,6 +5,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Placeholder, TabbedContent, TabPane
 
 from listentui.data.config import Config
+from listentui.pages.history import HistoryPage
 from listentui.pages.home import HomePage
 from listentui.pages.search import SearchPage
 from listentui.utilities import RichLogExtended
@@ -42,7 +43,7 @@ class MainScreen(Screen[None]):
             with TabPane("Search", id="search"):
                 yield SearchPage()
             with TabPane("History", id="history"):
-                yield Placeholder()
+                yield HistoryPage()
             with TabPane("Download", id="download"):
                 yield Placeholder()
             with TabPane("User", id="user"):

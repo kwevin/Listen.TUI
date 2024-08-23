@@ -2,6 +2,7 @@ from textual import work
 from textual.app import App
 
 from listentui.data.config import Config
+from listentui.listen.client import ListenClient
 from listentui.screen.login import LoginScreen
 from listentui.screen.main import MainScreen
 from listentui.utilities.logger import create_logger
@@ -20,10 +21,11 @@ class ListentuiApp(App[None]):
             return
         self.push_screen(MainScreen())
 
-    def on_unmount(self) -> None:
+    async def on_unmount(self) -> None:
         Config.get_config().save()
         if MPVThread.instance:
             MPVThread.instance.terminate()
+        await ListenClient.get_instance().close()
 
     def action_handle_url(self, url: str) -> None:
         self.app.open_url(url, new_tab=True)

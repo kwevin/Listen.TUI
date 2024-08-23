@@ -6,7 +6,7 @@ from textual.reactive import reactive
 from textual.widget import Widget
 
 from listentui.data.config import Config
-from listentui.listen import ListenClient, Song
+from listentui.listen import Song
 from listentui.screen.modal import ArtistScreen, SongScreen, SourceScreen
 from listentui.widgets.scrollableLabel import ScrollableLabel
 from listentui.widgets.vanityBar import VanityBar
@@ -53,7 +53,6 @@ class SongContainer(Widget):
     async def on_scrollable_label_clicked(self, event: ScrollableLabel.Clicked) -> None:
         if not self.song:
             return
-        client = ListenClient.get_instance()
         if event.widget.id == "artist":
             if not self.song.artists:
                 return
@@ -66,12 +65,7 @@ class SongContainer(Widget):
                 if not self.song.source:
                     return
                 source_id = self.song.source.id
-                self.notify(f"Fetching data for {event.content.plain}...")
-                source = await client.source(source_id)
-                if not source:
-                    return
-                self.app.clear_notifications()
-                self.app.push_screen(SourceScreen(source))
+                self.app.push_screen(SourceScreen(source_id))
 
     def set_tooltips(self, string: str | None) -> None:
         self.query_one("#title", ScrollableLabel).tooltip = string

@@ -21,6 +21,22 @@ from listentui.data.config import Config
 _pv_lock = Lock()
 
 
+def pv_log_handler(loglevel: str, component: str, message: str):
+    if component == "display-tags":
+        return
+    match loglevel:
+        case "info":
+            level = INFO
+        case "warn":
+            level = WARNING
+        case "debug":
+            level = DEBUG
+        case _:
+            level = DEBUG
+    logger = getLogger(__name__)
+    logger.log(level=level, msg=f"[{component}] {message}")  # noqa: G004
+
+
 class PreviewType(Enum):
     UNABLE = 1
     ERROR = 2
@@ -109,7 +125,7 @@ class MPVThread(Thread):
         super().__init__(name="MPVThread", daemon=True)
         self.main = main
         self.stream_url = "https://listen.moe/stream"
-        self.player = MPV(ytdl=True, **self.get_options(), log_handler=self.log_handler)
+        self.player = MPV(ytdl=True, **self.get_options(), terminal=False, log_handler=self.log_handler)
         self.watcher = MPVWatcher(self)
         self.muted_volume = 0
         self.cache: MPVThread.DemuxerCacheState | None = None
@@ -207,6 +223,10 @@ class MPVThread(Thread):
         def __init__(self) -> None:
             super().__init__()
 
+    class UnderRun(Message):
+        def __init__(self) -> None:
+            super().__init__()
+
     @property
     def paused(self) -> bool | None:
         return bool(self._get_value("pause"))
@@ -247,7 +267,7 @@ class MPVThread(Thread):
     def _get_value(self, value: str, *args: Any) -> Any | None:
         try:
             return getattr(self.player, value, *args)
-        except (RuntimeError, ShutdownError):
+        except (RuntimeError, ShutdownError, OSError):
             return None
 
     # def _watch_core_idle(self, _: bool, new_value: bool | None) -> None:
@@ -311,11 +331,9 @@ class MPVThread(Thread):
             mpv_options["af"] = "acompressor=ratio=4,loudnorm=I=-16:LRA=11:TP=-1.5"
         return mpv_options
 
-    @staticmethod
-    def log_handler(loglevel: str, component: str, message: str):
+    def log_handler(self, loglevel: str, component: str, message: str):
         if component == "display-tags":
             return
-            # self._log.debug(component)
         match loglevel:
             case "info":
                 level = INFO
@@ -326,19 +344,25 @@ class MPVThread(Thread):
             case _:
                 level = DEBUG
 
-        if "linearizing discontinuity" in message.lower() and MPVThread.instance:
-            MPVThread.instance.main.post_message(MPVThread.NewSong())
-        logger = getLogger(__name__)
-        logger.log(level=level, msg=f"[{component}] {message}")  # noqa: G004
+        if "linearizing discontinuity" in message.lower():
+            self.main.post_message(MPVThread.NewSong())
+        if "audio device underrun" in message.lower():
+            self.main.post_message(MPVThread.UnderRun())
+        self._log.log(level=level, msg=f"[{component}] {message}")
 
     def restart(self, timeout: int = 60) -> None:
         with self._restart_lock:
             self._log.debug("soft restarting")
-            state = self.paused
-            self.player.play(self.stream_url)
-            self.player.wait_until_playing(timeout=timeout)
-            self.paused = state or False
-            self.main.post_message(self.SuccessfulRestart())
+            try:
+                state = self.paused
+                self.player.play(self.stream_url)
+                self.player.wait_until_playing(timeout=timeout)
+                self.paused = state or False
+            except ShutdownError:
+                self._log.debug("Libmpv unexpectedly shutdown during the restart")
+                self.hard_restart()
+            else:
+                self.main.post_message(self.SuccessfulRestart())
 
     def safe_restart(self) -> None:
         with contextlib.suppress(TimeoutError):
@@ -426,7 +450,8 @@ class MPVThread(Thread):
             player = MPVThread.instance
             if player and player.volume and player.volume != 0:
                 options["volume"] = player.volume
-            MPVThread.pv_player = MPV(ytdl=True, **options, log_handler=MPVThread.log_handler)
+            options.update({"cache": True, "cache_pause_initial": True, "cache_pause_wait": 15})
+            MPVThread.pv_player = MPV(ytdl=True, terminal=False, **options, log_handler=pv_log_handler)
             pv_player = MPVThread.pv_player
 
             @MPVThread.pv_player.event_callback("end-file")
@@ -449,13 +474,13 @@ class MPVThread(Thread):
                         player.play()
 
             try:
-                if player:
-                    player.pause()
                 pv_player.play(final_url)
                 pv_player.wait_for_property("demuxer-cache-state", cond=bool)
                 pv_player.observe_property("demuxer-cache-state", data)
                 pv_player.wait_until_playing()
                 app.call_from_thread(callback, PreviewStatus(PreviewType.PLAYING))
+                if player:
+                    player.pause()
                 pv_player.wait_for_playback()
                 app.call_from_thread(callback, PreviewStatus(PreviewType.FINISHED))
             except Exception:

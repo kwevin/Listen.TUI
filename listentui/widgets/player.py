@@ -6,18 +6,20 @@ import json
 import time
 from datetime import datetime, timedelta
 from logging import getLogger
-from typing import Any
+from typing import Any, cast
 
 import websockets.client as websockets
 from textual import on, work
 from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.message import Message
+from textual.signal import Signal
 from textual.widget import Widget
 from textual.widgets import Label
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
-from listentui.listen.types import ListenWsData
+from listentui.listen.client import ListenClient
+from listentui.listen.interface import ListenWsData, Song
 from listentui.widgets.durationProgressBar import DurationProgressBar
 from listentui.widgets.mpvThread import MPVThread
 from listentui.widgets.songContainer import SongContainer
@@ -80,6 +82,7 @@ class Player(Widget):
         # self.can_update = True
         self.set_interval(1, self.update_time_elapsed)
         self.set_interval(1, self.update_cache)
+        self.websocket_update = Signal[ListenWsData](self, "ws_update")
 
     def compose(self) -> ComposeResult:
         yield SongContainer()
@@ -103,7 +106,6 @@ class Player(Widget):
     def update_retries(self, retry: int, soft_cap: int, hard_cap: int, timeout: int) -> None:
         retries = self.query_one("#retries", Label)
         if retry > 0:
-            retries.styles.visibility = "visibile"
             retries.update(f"{retry}/{soft_cap} | {hard_cap}!")
             if retry > soft_cap:
                 retries.styles.color = "pink"
@@ -115,7 +117,6 @@ class Player(Widget):
             retries.tooltip = f"timeout: {timeout}s"
         else:
             retries.update("")
-            retries.styles.visibility = "hidden"
 
     def update_cache(self) -> None:
         if not self.player.cache:
@@ -132,8 +133,6 @@ class Player(Widget):
             return
 
         self.query_one("#delay", Label).update(f"{round(self.mpv_time - self.websocket_time)}s")
-        self.mpv_time = 0
-        self.websocket_time = 0
 
     def update_time_elapsed(self) -> None:
         self.query_one("#time", Label).update(f"{timedelta(seconds=round(time.time() - self.start_time))}")
@@ -149,7 +148,6 @@ class Player(Widget):
 
     @on(WebsocketUpdated)
     def update_websocket_time(self, _: None) -> None:
-        self.just_restarted = False
         self.websocket_time = time.time()
         self.update_delay()
 
@@ -160,15 +158,18 @@ class Player(Widget):
     @on(MPVThread.NewSong)
     @on(MPVThread.Metadata)
     def update_mpv_time(self) -> None:
+        self.progress_bar.resume()
         self.mpv_time = time.time()
         self.update_delay()
 
     # self.progress_bar.resume()
     # self.can_update = True
 
-    def update_container(self, data: ListenWsData) -> None:
-        self.query_one(SongContainer).update_song(data.song)
+    @work
+    async def update_container(self, data: ListenWsData) -> None:
+        self.query_one(SongContainer).update_song(cast(Song, await ListenClient.get_instance().song(data.song.id)))
         self.query_one(VanityBar).update_vanity(data)
+        self.loading = False
 
     # @work(group="wait_update", exclusive=True)
     # async def can_force_update(self, data: ListenWsData) -> None:
@@ -195,7 +196,7 @@ class Player(Widget):
 
     @on(MPVThread.Fail)
     def player_failed(self, event: MPVThread.Fail) -> None:
-        self.app.exit("Player failed to connect / regain connection")
+        self.app.exit(message="Player failed to connect / regain connection")
 
     @work(exclusive=True, group="websocket")
     async def websocket(self) -> None:
@@ -209,11 +210,10 @@ class Player(Widget):
                             self.ws_data = ListenWsData.from_data(res)
                             # self._log.info(pretty_repr(self.ws_data))
                             self.post_message(self.WebsocketUpdated(self.ws_data))
-                            # self.progress_bar.pause()
+                            self.websocket_update.publish(self.ws_data)
                             self.progress_bar.update_progress(self.ws_data.song)
                             self.update_container(self.ws_data)
                         case 0:
-                            self.loading = False
                             self.post_message(self.WebsocketStatus(True, last_heartbeat))
                             self.keepalive = self.ws_keepalive(res["d"]["heartbeat"] / 1000)
                         case 10:
