@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from time import time
-from typing import Any, Literal, NewType, Optional, Self, Type, Union
+from typing import Any, ClassVar, Literal, NewType, Optional, Self, Type, Union
 
 from markdownify import markdownify  # type: ignore
 
@@ -15,8 +15,12 @@ SongID = NewType("SongID", int)
 SourceID = NewType("SourceID", int)
 
 
+class Base:
+    romaji_first: ClassVar[bool] = False
+
+
 @dataclass
-class Socials:
+class Socials(Base):
     name: str
     url: str
 
@@ -26,7 +30,7 @@ class Socials:
 
 
 @dataclass
-class Image:
+class Image(Base):
     name: str
     url: str
 
@@ -50,7 +54,7 @@ class Image:
 
 
 @dataclass
-class User:
+class User(Base):
     uuid: str
     username: str
     display_name: str
@@ -104,7 +108,7 @@ class CurrentUser(User):
 
 
 @dataclass
-class Album:
+class Album(Base):
     id: AlbumID
     name: str | None
     name_romaji: str | None
@@ -129,8 +133,8 @@ class Album:
             socials=[Socials.from_data(social) for social in album["links"]] if album.get("links") else None,
         )
 
-    def format_name(self, *, romaji_first: bool = True) -> str | None:
-        return (self.name_romaji or self.name) if romaji_first else (self.name or self.name_romaji)
+    def format_name(self) -> str | None:
+        return (self.name_romaji or self.name) if self.romaji_first else (self.name or self.name_romaji)
 
     def format_socials(self, *, sep: str = ", ") -> str | None:
         if not self.socials:
@@ -139,7 +143,7 @@ class Album:
 
 
 @dataclass
-class Artist:
+class Artist(Base):
     id: ArtistID
     name: str | None
     name_romaji: str | None
@@ -191,8 +195,8 @@ class Artist:
             else None,
         )
 
-    def format_name(self, *, romaji_first: bool = True) -> str | None:
-        return (self.name_romaji or self.name) if romaji_first else (self.name or self.name_romaji)
+    def format_name(self) -> str | None:
+        return (self.name_romaji or self.name) if self.romaji_first else (self.name or self.name_romaji)
 
     def format_socials(self, *, sep: str = ", ", use_app: bool = False) -> str | None:
         if not self.socials:
@@ -205,7 +209,7 @@ class Artist:
 
 
 @dataclass
-class Character:
+class Character(Base):
     id: CharacterID
     name: Optional[str] = None
     name_romaji: Optional[str] = None
@@ -220,7 +224,7 @@ class Character:
 
 
 @dataclass
-class Source:
+class Source(Base):
     id: SourceID
     name: str | None
     name_romaji: str | None
@@ -249,8 +253,8 @@ class Source:
             else None,
         )
 
-    def format_name(self, *, romaji_first: bool = True) -> str | None:
-        return (self.name_romaji or self.name) if romaji_first else (self.name or self.name_romaji)
+    def format_name(self) -> str | None:
+        return (self.name_romaji or self.name) if self.romaji_first else (self.name or self.name_romaji)
 
     def format_socials(self, *, sep: str = ", ", use_app: bool = False) -> str | None:
         if not self.socials:
@@ -266,7 +270,7 @@ class Source:
 
 
 @dataclass
-class Requester:
+class Requester(Base):
     uuid: str
     username: str
     display_name: str
@@ -288,7 +292,7 @@ class Uploader(Requester):
 
 
 @dataclass
-class Event:
+class Event(Base):
     id: str
     name: str
     slug: str
@@ -303,7 +307,7 @@ class Event:
 
 
 @dataclass
-class Song:
+class Song(Base):
     @classmethod
     def from_data(cls: Type[Self], data: dict[str, Any]) -> Self:
         return cls(
@@ -326,7 +330,6 @@ class Song:
         self,
         count: Optional[int] = None,
         *,
-        romaji_first: bool = True,
         show_character: bool = False,
         embed_link: bool = False,
     ) -> list[str] | None:
@@ -342,7 +345,7 @@ class Song:
             if show_character and self.characters and artist.characters:
                 character_map: dict[int, Character] = {character.id: character for character in artist.characters}
 
-            name = (artist.name_romaji or artist.name) if romaji_first else (artist.name or artist.name_romaji)
+            name = (artist.name_romaji or artist.name) if self.romaji_first else (artist.name or artist.name_romaji)
             character = None
             character_name = None
 
@@ -351,7 +354,7 @@ class Song:
                 if character:
                     character_name = (
                         (character.name_romaji or character.name)
-                        if romaji_first
+                        if self.romaji_first
                         else (character.name or character.name_romaji)
                     )
 
@@ -375,20 +378,17 @@ class Song:
 
         return artists
 
-    def format_artists_list(self, *, romaji_first: bool = True) -> list[str] | None:
-        return self._artist_list(romaji_first=romaji_first, show_character=True)
+    def format_artists_list(self, show_character: bool = True) -> list[str] | None:
+        return self._artist_list(show_character=show_character)
 
     def format_artists(
         self,
         count: Optional[int] = None,
         *,
         show_character: bool = True,
-        romaji_first: bool = True,
         embed_link: bool = False,
     ) -> str | None:
-        formatted_artist = self._artist_list(
-            count=count, show_character=show_character, romaji_first=romaji_first, embed_link=embed_link
-        )
+        formatted_artist = self._artist_list(count=count, show_character=show_character, embed_link=embed_link)
         if not formatted_artist:
             return None
         return ", ".join(formatted_artist)
@@ -400,26 +400,26 @@ class Song:
             return self.artists[0].image.url
         return None
 
-    def _format(self, albs: Union[Album, Source], romaji_first: bool = True, embed_link: bool = False) -> str | None:
-        name = (albs.name_romaji or albs.name) if romaji_first else (albs.name or albs.name_romaji)
+    def _format(self, albs: Union[Album, Source], embed_link: bool = False) -> str | None:
+        name = (albs.name_romaji or albs.name) if self.romaji_first else (albs.name or albs.name_romaji)
         if not name:
             return None
         if embed_link:
             return f"[link={albs.link}]{name}[/link]"
         return name
 
-    def format_album(self, *, romaji_first: bool = True, embed_link: bool = False) -> str | None:
+    def format_album(self, *, embed_link: bool = False) -> str | None:
         if not self.album:
             return None
-        return self._format(self.album, romaji_first, embed_link)
+        return self._format(self.album, embed_link)
 
-    def format_source(self, *, romaji_first: bool = True, embed_link: bool = False) -> str | None:
+    def format_source(self, *, embed_link: bool = False) -> str | None:
         if not self.source:
             return None
-        return self._format(self.source, romaji_first, embed_link)
+        return self._format(self.source, embed_link)
 
-    def format_title(self, *, romaji_first: bool = True) -> str | None:
-        title = (self.title_romaji or self.title) if romaji_first else (self.title or self.title_romaji)
+    def format_title(self) -> str | None:
+        title = (self.title_romaji or self.title) if self.romaji_first else (self.title or self.title_romaji)
         return title or None
 
     def album_image(self):
@@ -452,15 +452,21 @@ class Song:
 
 
 @dataclass
-class SystemFeed:
+class SystemFeed(Base):
     type: ActivityType
     created_at: datetime
     song: Song | None
     activity: str = field(init=False)
 
     class ActivityType(Enum):
+        # Someone commented on the user's feed.
+        COMMENTED = 1
+        # The user favorited a song
         FAVORITED = 2
-        UPLOADED = 4
+        # The user uploaded a song
+        UPLOADED = 3
+        # The user approved an upload (only admins)
+        APPROVEDUPLOAD = 4
 
     @classmethod
     def from_data(cls: Type[Self], data: dict[str, Any]) -> Self:
@@ -477,10 +483,12 @@ class SystemFeed:
                 self.activity = "Favorited"
             case self.ActivityType.UPLOADED:
                 self.activity = "Uploaded"
+            case _:
+                self.activity = "User did something"
 
 
 @dataclass
-class PlayStatistics:
+class PlayStatistics(Base):
     created_at: datetime
     song: Song
     requester: Requester | None

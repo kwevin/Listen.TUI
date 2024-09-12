@@ -5,11 +5,9 @@ from textual.app import ComposeResult
 from textual.reactive import reactive
 from textual.widget import Widget
 
-from listentui.data.config import Config
 from listentui.listen import Song
 from listentui.screen.modal import ArtistScreen, SongScreen, SourceScreen
 from listentui.widgets.scrollableLabel import ScrollableLabel
-from listentui.widgets.vanityBar import VanityBar
 
 
 class SongContainer(Widget):
@@ -27,14 +25,12 @@ class SongContainer(Widget):
 
     def __init__(self, song: Optional[Song] = None) -> None:
         super().__init__()
-        if song:
-            self.song = song
+        self._optional_song = song
 
     def watch_song(self, song: Song) -> None:
-        romaji_first = Config.get_config().display.romaji_first
-        self.artist = song.format_artists_list(romaji_first=romaji_first) or []
-        self.title = song.format_title(romaji_first=romaji_first) or ""
-        self.source = song.format_source(romaji_first=romaji_first)
+        self.artist = song.format_artists_list() or []
+        self.title = song.format_title() or ""
+        self.source = song.format_source()
         self.query_one("#artist", ScrollableLabel).update(
             *[Text.from_markup(f"[red]{artist}[/]") for artist in self.artist]
         )
@@ -46,9 +42,12 @@ class SongContainer(Widget):
         self.song = song
 
     def compose(self) -> ComposeResult:
-        yield VanityBar()
         yield ScrollableLabel(id="artist")
         yield ScrollableLabel(id="title", sep=" ")
+
+    def on_mount(self) -> None:
+        if self._optional_song:
+            self.watch_song(self._optional_song)
 
     async def on_scrollable_label_clicked(self, event: ScrollableLabel.Clicked) -> None:
         if not self.song:

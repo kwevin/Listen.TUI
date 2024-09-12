@@ -34,7 +34,7 @@ class ScrollableLabel(Widget):
         height: 1;
     }
     """
-    text = reactive(Text, always_update=True, layout=True)
+    text = reactive(Text, always_update=True)
     _offset = var(0, always_update=True, init=False)
     _mouse_pos = var(-1, always_update=True, init=False)
 
@@ -54,6 +54,7 @@ class ScrollableLabel(Widget):
         *texts: Text,
         sep: str = ", ",
         can_scroll: bool = True,
+        highlight_under_mouse: bool = True,
         speed: float = 0.1,
         use_mouse_scroll: bool = False,
         mouse_scroll_amount: int = 1,
@@ -69,6 +70,7 @@ class ScrollableLabel(Widget):
         self._original = list(texts)
         self._sep = sep
         self._can_scroll = can_scroll
+        self._can_highlight = highlight_under_mouse
         self._auto_return = auto_return
         self._return_delay = return_delay
         self._use_mouse_scroll = use_mouse_scroll
@@ -174,13 +176,13 @@ class ScrollableLabel(Widget):
         if self._current_highlighted == text_range and not forced:
             return
         self._current_highlighted = text_range
-        start = max(text_range.start - self._offset, 0)
-        end = max(text_range.end - self._offset, 0)
-        # self.notify(f"{start = }, {end = }")
-        spans = [*self._strip_underline(self.text.spans), Span(start, end, "underline")]
-        self.text = Text(self.text.plain, overflow="ellipsis", no_wrap=True, spans=spans)
+        if self._can_highlight:
+            start = max(text_range.start - self._offset, 0)
+            end = max(text_range.end - self._offset, 0)
+            spans = [*self._strip_underline(self.text.spans), Span(start, end, "underline")]
+            self.text = Text(self.text.plain, overflow="ellipsis", no_wrap=True, spans=spans)
 
-    def _strip_underline(self, spans: Iterable[Span]) -> list[Span]:
+    def _strip_underline(self, spans: list[Span]) -> list[Span]:
         return [span for span in spans if span.style != "underline"]
 
     def _remove_underline(self):
@@ -198,6 +200,9 @@ class ScrollableLabel(Widget):
         self._update_text(self._original)
 
     def _on_resize(self, event: events.Resize) -> None:
+        if self._is_scrolling:
+            return
+        self.refresh(layout=True)
         self._reset_state()
 
     def _calculate_scrollable_amount(self) -> None:
@@ -286,7 +291,6 @@ class ScrollableLabel(Widget):
             return
         if self._can_scroll:
             self.reset()
-        # self._offset = self._offset
 
     def _on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
         if self._max_scroll == -1:
@@ -328,3 +332,6 @@ class ScrollableLabel(Widget):
         if self._mouse_pos != -1:
             return
         self._unscroll_timer.resume()
+
+    def on_hide(self) -> None:
+        self._reset_state()

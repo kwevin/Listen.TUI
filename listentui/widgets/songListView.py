@@ -9,7 +9,6 @@ from textual.containers import Grid
 from textual.message import Message
 from textual.widgets import Label, ListItem, ListView, Static
 
-from listentui.data.config import Config
 from listentui.data.theme import Theme
 from listentui.listen import Song
 from listentui.listen.interface import Album, Artist, Source
@@ -42,9 +41,8 @@ class SongItem(ListItem):
 
     def __init__(self, song: Song):
         self.song = song
-        romaji_first = Config.get_config().display.romaji_first
-        title = song.format_title(romaji_first=romaji_first)
-        artists = song.format_artists_list(romaji_first=romaji_first) or []
+        title = song.format_title()
+        artists = song.format_artists_list() or []
         super().__init__(
             ScrollableLabel(
                 Text.from_markup(f"{title}"),
@@ -92,6 +90,7 @@ class AdvSongItem(ListItem):
     DEFAULT_CSS = """
     AdvSongItem {
         padding: 1 0 1 0;
+        border-left: inner $background-lighten-2;
     }
     AdvSongItem ScrollableLabel {
         margin-left: 1;
@@ -133,20 +132,22 @@ class AdvSongItem(ListItem):
         margin-right: 1;
     }
 
-    .favorited {
+    AdvSongItem.favorited {
         border-left: inner red;
     }
 
     """
 
-    def __init__(self, song: Song, favorited: bool = False):
-        super().__init__(id=f"_song-{song.id}")
+    def __init__(self, song: Song, favorited: bool = False, should_id: bool = True):
+        if should_id:
+            super().__init__(id=f"_song-{song.id}")
+        else:
+            super().__init__()
         self.song = song
-        romaji_first = Config.get_config().display.romaji_first
-        self.title = song.format_title(romaji_first=romaji_first)
-        self.artists = song.format_artists_list(romaji_first=romaji_first) or []
-        self.source = song.format_source(romaji_first=romaji_first) or ""
-        self.album = song.format_album(romaji_first=romaji_first) or ""
+        self.title = song.format_title()
+        self.artists = song.format_artists_list() or []
+        self.source = song.format_source() or ""
+        self.album = song.format_album() or ""
         self.set_class(favorited, "favorited")
 
     def compose(self) -> ComposeResult:
@@ -265,11 +266,7 @@ class SongListView(ListView):
     SongListView {
         height: auto;
     }
-    SongListView SongItem {
-        margin-bottom: 1;
-        background: $background-lighten-1;
-    }
-    SongListView AdvSongItem {
+    SongListView SongItem, AdvSongItem {
         margin-bottom: 1;
         background: $background-lighten-1;
     }
@@ -318,7 +315,7 @@ class SongListView(ListView):
         self.post_message(self.AlbumSelected(event.album))
 
     def action_select_cursor(self) -> None:
-        selected_child: SongItem | None = self.highlighted_child  # type: ignore
+        selected_child: SongItem | None = cast(SongItem | None, self.highlighted_child)
         if selected_child is None:
             return
         self.post_message(self.SongSelected(selected_child.song))

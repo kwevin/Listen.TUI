@@ -1,3 +1,4 @@
+import contextlib
 import json
 import time
 from asyncio import Lock
@@ -60,6 +61,8 @@ class Queries:
     search: DocumentNode
     request_song: DocumentNode
     request_random_song: DocumentNode
+    user_uploads: DocumentNode
+    user_favorites: DocumentNode
 
 
 def _build_queries():
@@ -324,6 +327,34 @@ def _build_queries():
         }
     """
     ).safe_substitute(base)
+    user_favorites = Template(
+        """
+        query user($$username: String!, $$offset: Int!, $$count: Int!) {
+            user(username: $$username) {
+                favorites(offset: $$offset, count: $$count) {
+                    favorites {
+                        song {
+                            ${song}
+                        }
+                    }
+                }
+            }
+        }
+    """
+    ).safe_substitute(base)
+    user_uploads = Template(
+        """
+        query user($$username: String!, $$offset: Int!, $$count: Int!) {
+            user(username: $$username) {
+                processedUploads(offset: $$offset, count: $$count) {
+                    uploads {
+                        ${song}
+                    }
+                }
+            }
+        }
+    """
+    ).safe_substitute(base)
 
     return Queries(
         login=gql(login),
@@ -340,6 +371,8 @@ def _build_queries():
         search=gql(search),
         request_song=gql(request),
         request_random_song=gql(request_random),
+        user_favorites=gql(user_favorites),
+        user_uploads=gql(user_uploads),
     )
 
 
@@ -355,7 +388,7 @@ def requires_auth(func: Callable[..., Coroutine[Any, Any, Any]]) -> Any:
 
 class ListenClient:
     ENDPOINT = "https://listen.moe/graphql"
-    SYSTEM_COUNT = 10
+    SYSTEM_COUNT = 20
     SYSTEM_OFFSET = 0
     _client_instance: Optional[Self] = None
     _lock = Lock()
@@ -406,7 +439,11 @@ class ListenClient:
             query = _build_queries()
 
             if user_token:
-                params = {"username": username, "systemOffset": cls.SYSTEM_OFFSET, "systemCount": cls.SYSTEM_COUNT}
+                params: dict[str, str | int] = {
+                    "username": username,
+                    "systemOffset": cls.SYSTEM_OFFSET,
+                    "systemCount": cls.SYSTEM_COUNT,
+                }
                 async with client as session:
                     res: dict[str, Any] = await session.execute(document=query.user, variable_values=params)  # pyright: ignore
                 user: dict[str, Any] = res["user"]
@@ -427,6 +464,9 @@ class ListenClient:
                 token: str = res["login"]["token"]
 
             await client.close_async()
+        if cls._client_instance:
+            with contextlib.suppress(AttributeError):
+                await cls._client_instance.close()
         return cls(CurrentUser.from_data_with_password(user, token, password))
 
     @classmethod
@@ -448,7 +488,7 @@ class ListenClient:
         """regenerate a new token for the current user"""
         if not self.logged_in or self._user is None:
             return
-        params = {
+        params: dict[str, str | int] = {
             "username": self._user.username,
             "password": self._user.password,
             "systemOffset": self.SYSTEM_OFFSET,
@@ -464,7 +504,6 @@ class ListenClient:
         self._client = Client(transport=transport, fetch_schema_from_transport=False)
         async with self._lock:
             self._session = await self._client.connect_async(reconnecting=True)  # pyright: ignore
-
         return
 
     async def _execute(
@@ -491,16 +530,16 @@ class ListenClient:
             if exc.errors[0]["message"] == "Not logged in." and self._user is not None:
                 await self.regenerate_token()
                 return await self._session.execute(document=document, variable_values=variable_values)  # pyright: ignore
-            raise Exception("Failed to regenerate user token") from exc
+            raise exc
 
-    async def update_current_user(self, offset: int = 0, count: int = 5) -> CurrentUser | None:
+    async def update_current_user(self, offset: int = 0, count: int = 20) -> CurrentUser:
         """update the current user with the latest data from the api"""
         if not self._user:
-            return None
+            raise NotAuthenticatedError()
         current_user = self._user
         user = await self.user(current_user.username, offset, count)
         if not user:
-            return None
+            raise Exception("wtf")
         self._user = CurrentUser(
             user.uuid,
             user.username,
@@ -575,10 +614,16 @@ class ListenClient:
             return None
         return Source.from_data(source)
 
-    async def user(self, username: str, system_offset: int = 0, system_count: int = 5) -> User | None:
+    async def user(
+        self, username: str, system_offset: int | None = None, system_count: int | None = None
+    ) -> User | None:
         """return a user from the api"""
         query = self._queries.user
-        params = {"username": username, "systemOffset": system_offset, "systemCount": system_count}
+        params: dict[str, str | int] = {
+            "username": username,
+            "systemOffset": system_offset or self.SYSTEM_OFFSET,
+            "systemCount": system_count or self.SYSTEM_COUNT,
+        }
         res = await self._execute_uncached(document=query, variable_values=params)
         user = res.get("user", None)
         if not user:
@@ -598,14 +643,14 @@ class ListenClient:
         if not self.logged_in and favorite_only:
             raise NotAuthenticatedError("Not logged in")
         query = self._queries.search
-        params = {"term": term, "favoritesOnly": favorite_only}
+        params: dict[str, str | int | bool | None] = {"term": term, "favoritesOnly": favorite_only}
         res = await self._execute(document=query, variable_values=params)
         songs = res["search"]
         songs = songs[:count] if count else songs
         return [Song.from_data(song) for song in songs]
 
     @overload
-    async def check_favorite(self, song_ids: list[Union[SongID, int]]) -> dict[SongID, bool]: ...
+    async def check_favorite(self, song_ids: list[SongID]) -> dict[SongID, bool]: ...
 
     @overload
     async def check_favorite(self, song_id: Union[SongID, int]) -> bool: ...
@@ -679,6 +724,20 @@ class ListenClient:
             res = await self._execute_uncached(document=query)
 
         return Song.from_data(res["requestRandomFavorite"])
+
+    async def user_favorites(self, username: str, offset: int = 0, count: int | None = 20) -> list[Song]:
+        query = self._queries.user_favorites
+        params: dict[str, str | int] = {"username": username, "offset": offset, "count": count or self.SYSTEM_COUNT}
+        res = await self._execute_uncached(document=query, variable_values=params)
+
+        return [Song.from_data(data["song"]) for data in res["user"]["favorites"]["favorites"]]
+
+    async def user_uploads(self, username: str, offset: int = 0, count: int | None = 20) -> list[Song]:
+        query = self._queries.user_uploads
+        params: dict[str, str | int] = {"username": username, "offset": offset, "count": count or self.SYSTEM_COUNT}
+        res = await self._execute_uncached(document=query, variable_values=params)
+
+        return [Song.from_data(data["song"]) for data in res["user"]["processedUploads"]["uploads"]]
 
 
 # if __name__ == "__main__":

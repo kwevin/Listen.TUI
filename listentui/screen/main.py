@@ -1,13 +1,15 @@
 from textual.app import ComposeResult
-from textual.events import Key
 from textual.reactive import var
 from textual.screen import Screen
 from textual.widgets import Footer, Placeholder, TabbedContent, TabPane
 
 from listentui.data.config import Config
+from listentui.listen.client import ListenClient
 from listentui.pages.history import HistoryPage
 from listentui.pages.home import HomePage
+from listentui.pages.profile import ProfilePage
 from listentui.pages.search import SearchPage
+from listentui.pages.setting import SettingPage
 from listentui.utilities import RichLogExtended
 
 
@@ -22,22 +24,9 @@ class MainScreen(Screen[None]):
 
     def __init__(self) -> None:
         super().__init__()
-        self.content = ["home", "search", "history", "download", "user", "setting"]
-
-    def watch_index(self, value: int) -> None:
-        self.query_one(TabbedContent).active = self.content[value]
-
-    def validate_index(self, value: int) -> int:
-        max_idx = len(self.content) - 1
-        if value == max_idx + 1:
-            value = 0
-        elif value == -1:
-            value = max_idx
-
-        return value
 
     def compose(self) -> ComposeResult:
-        with TabbedContent():
+        with TabbedContent(id="topbar"):
             with TabPane("Home", id="home"):
                 yield HomePage()
             with TabPane("Search", id="search"):
@@ -46,31 +35,36 @@ class MainScreen(Screen[None]):
                 yield HistoryPage()
             with TabPane("Download", id="download"):
                 yield Placeholder()
-            with TabPane("User", id="user"):
-                yield Placeholder()
             with TabPane("Setting", id="setting"):
-                yield Placeholder()
+                yield SettingPage()
         yield Footer()
 
     async def on_mount(self) -> None:
+        if ListenClient.get_instance().current_user:
+            await self.query_one("#topbar", TabbedContent).add_pane(
+                TabPane("Profile", ProfilePage(), id="profile"), before="setting"
+            )
+
         verbose = Config.get_config().advance.stats_for_nerd
         if verbose:
-            self.content.insert(len(self.content) - 1, "log")
-            self.query_one(TabbedContent).add_pane(TabPane("Log", RichLogExtended(), id="log"), before="setting")
+            await self.query_one("#topbar", TabbedContent).add_pane(
+                TabPane("Log", RichLogExtended(), id="log"), before="setting"
+            )
 
-    def on_tabbed_content_tab_activated(self, tab: TabbedContent.TabActivated) -> None:
-        tab_id = tab.pane.id
-        if not tab_id:
-            return
-        self.index = self.content.index(tab_id)
+    # @on(TabbedContent.TabActivated, "#topbar")
+    # def on_tabbed_content_tab_activated(self, tab: TabbedContent.TabActivated) -> None:
+    #     tab_id = tab.pane.id
+    #     if not tab_id:
+    #         return
+    #     self.index = self.content.index(tab_id)
 
-    def on_key(self, event: Key) -> None:
-        if event.key == "tab":
-            event.prevent_default()
-            self.index += 1
-        elif event.key == "shift+tab":
-            event.prevent_default()
-            self.index -= 1
+    # def on_key(self, event: Key) -> None:
+    #     if event.key == "tab":
+    #         event.prevent_default()
+    #         self.index += 1
+    #     elif event.key == "shift+tab":
+    #         event.prevent_default()
+    #         self.index -= 1
 
     # def on_listen_websocket_updated(self, event: ListenWebsocket.Updated) -> None:
     #     romaji_first = Config.get_config().display.romaji_first

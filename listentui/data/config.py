@@ -1,3 +1,4 @@
+import os
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -23,13 +24,15 @@ class Client:
 class Presence:
     enable: bool = True
     """Enable discord's rich presence"""
+    type: int = 2
+    """Type of presence (0 or 2)"""
     default_placeholder: str = " ♪"
     """Text to add to achieve minimum length requirement (must be at least 2 characters)"""
     use_fallback: bool = True
     """Whether to use a fallback image when no image is present"""
     fallback: str = "default"
     """Fallback to use when there is no image present ("default" for LISTEN.moe's icon)"""
-    use_artist: bool = True
+    use_artist: bool = False
     """Whether to use artist image as image when no album image is present"""
     detail: str = "${title}"
     """Discord Rich Presence Title"""
@@ -41,8 +44,8 @@ class Presence:
     """Discord Rich Presence Small Image alt-text"""
     show_time_left: bool = True
     """Whether to show time remaining"""
-    show_small_image: bool = True
-    """Whether to show small image (artist image)"""
+    show_artist_as_small_icon: bool = False
+    """Whether to show artist as small image icon"""
 
     def __post_init__(self):
         minimum_length = 2
@@ -54,24 +57,16 @@ class Presence:
 class Display:
     romaji_first: bool = True
     """Prefer romaji first"""
-    show_romaji_tooltip: bool = True
-    """Show romaji as a tooltip on player hover"""
-    user_feed_amount: int = 10
-    """Amount of user feed to show"""
-    history_amount: int = 100
-    """Amount of history to show"""
-    open_in_app_browser: bool = True
-    """Whether to open clickable content within the app"""
-    confirm_before_open: bool = False
-    """Show confirmation dialog before opening a clickable content"""
 
 
 @dataclass
 class Player:
     mpv_options: dict[str, Any] = field(default_factory=dict)
     """MPV options to pass to mpv (see https://mpv.io/manual/master/#options)"""
-    timeout_restart: int = 20
-    """How long to wait before restarting playback"""
+    inactivity_timeout: int = 5
+    """How long to wait after the player becomes inactive before restarting"""
+    restart_timeout: int = 20
+    """How long to wait for playback after restarting"""
     volume_step: int = 5
     """How much to raise/lower volume by"""
     dynamic_range_compression: bool = True
@@ -87,6 +82,12 @@ class Player:
                 "cache_pause_wait": 3,
                 "demuxer_lavf_linearize_timestamps": True,
             }
+
+
+@dataclass
+class Downloader:
+    use_radio_metadata: bool = True
+    """Use the radio given metadata over source"""
 
 
 @dataclass
@@ -107,6 +108,7 @@ class DefaultConfig:
     display: Display = field(default_factory=Display)
     presence: Presence = field(default_factory=Presence)
     player: Player = field(default_factory=Player)
+    downloader: Downloader = field(default_factory=Downloader)
     advance: Advance = field(default_factory=Advance)
     persistant: Persistant = field(default_factory=Persistant)
 
@@ -119,9 +121,10 @@ class Config:
         self.config_file = self.config_root.joinpath("config.toml")
         self._conf: dict[str, Any] = {}
         self.client: Client
-        self.rich_presence: Presence
+        self.presence: Presence
         self.display: Display
         self.player: Player
+        self.downloader: Downloader
         self.advance: Advance
         self.persistant: Persistant
         self._load_config()
@@ -132,7 +135,9 @@ class Config:
         return self._conf
 
     def get_config_root(self) -> Path:
-        return Path(sys.argv[0]).parent.resolve()
+        if getattr(sys, "frozen", False):
+            return Path(sys.argv[0]).parent.resolve()
+        return Path(__package__ or os.getcwd()).parent.resolve()
         # if __portable__:
         #     return Path(sys.argv[0]).parent.resolve()
 
@@ -157,9 +162,10 @@ class Config:
                 self._conf = tomli.load(f)
 
         self.client = Client(**self._conf["client"])
-        self.rich_presence = Presence(**self._conf["presence"])
+        self.presence = Presence(**self._conf["presence"])
         self.display = Display(**self._conf["display"])
         self.player = Player(**self._conf["player"])
+        self.downloader = Downloader(**self._conf["downloader"])
         self.advance = Advance(**self._conf["advance"])
         self.persistant = Persistant(**self._conf["persistant"])
 
@@ -173,7 +179,15 @@ class Config:
     def save(self):
         self._write_config(
             asdict(
-                DefaultConfig(self.client, self.display, self.rich_presence, self.player, self.advance, self.persistant)
+                DefaultConfig(
+                    self.client,
+                    self.display,
+                    self.presence,
+                    self.player,
+                    self.downloader,
+                    self.advance,
+                    self.persistant,
+                )
             )
         )
         self._load_config()

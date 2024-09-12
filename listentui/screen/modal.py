@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from threading import Thread
 from typing import Any, ClassVar, Optional, cast
 
 from rich.text import Text
@@ -7,12 +8,11 @@ from textual import events, on, work
 from textual.app import ComposeResult
 from textual.binding import BindingType
 from textual.containers import Center, Container, Grid, Horizontal, VerticalScroll
-from textual.css.query import QueryError
+from textual.lazy import Lazy
 from textual.message import Message
-from textual.screen import ModalScreen
+from textual.screen import Screen
 from textual.widgets import Button, Collapsible, Label, ListView, Markdown, Static
 
-from listentui.data.config import Config
 from listentui.data.theme import Theme
 from listentui.listen import ListenClient
 from listentui.listen.client import RequestError
@@ -28,11 +28,12 @@ from listentui.widgets.songListView import (
 )
 
 
-class SourceScreen(ModalScreen[None]):
+class SourceScreen(Screen[None]):
     DEFAULT_CSS = """
     SourceScreen {
         align: center middle;
         background: $background;
+        hatch: left $background-lighten-1 60%;
     }
     SourceScreen #box {
         width: 100%;
@@ -68,7 +69,6 @@ class SourceScreen(ModalScreen[None]):
 
     def __init__(self, source_id: SourceID):
         super().__init__()
-        self.romaji_first = Config.get_config().display.romaji_first
         self.source_id = source_id
         self.source: Source | None = None
 
@@ -91,12 +91,16 @@ class SourceScreen(ModalScreen[None]):
                     for album_id, songs in id_to_song.items():
                         album = id_to_album[album_id]
                         yield Collapsible(
-                            SongListView(*[SongItem(song) for song in songs], initial_index=None),
-                            title=f"{album.format_name(romaji_first=self.romaji_first)}\n{len(songs)} Songs",
+                            Lazy(SongListView(*[SongItem(song) for song in songs], initial_index=None)),
+                            title=f"{album.format_name()}\n{len(songs)} Songs",
                         )
                 if self.source.songs_without_album:
                     yield Collapsible(
-                        SongListView(*[SongItem(song) for song in self.source.songs_without_album], initial_index=None),
+                        Lazy(
+                            SongListView(
+                                *[SongItem(song) for song in self.source.songs_without_album], initial_index=None
+                            )
+                        ),
                         title=f"- No source -\n{len(self.source.songs_without_album)} Songs",
                     )
 
@@ -140,7 +144,7 @@ class SourceScreen(ModalScreen[None]):
         self.query_one("#box", Container).loading = False
         if self.source is None:
             raise Exception("source cannot be None")
-        self.query_one("#name", Label).update(self.source.format_name(romaji_first=self.romaji_first) or "")
+        self.query_one("#name", Label).update(self.source.format_name() or "")
         self.query_one("#links", Label).update(
             f"{self.source.format_socials(sep=' ') or '- No links for this source yet - '}"
         )
@@ -149,20 +153,18 @@ class SourceScreen(ModalScreen[None]):
         self.dismiss()
 
 
-class SongScreen(ModalScreen[bool]):
+class SongScreen(Screen[bool]):
     """Screen for confirming actions"""
 
     DEFAULT_CSS = """
     SongScreen {
         align: center middle;
         background: $background;
+        hatch: left $background-lighten-1 60%;
     }
     SongScreen ScrollableLabel {
         height: 1;
     }
-    # SongScreen #artist {
-    #     color: red;
-    # }
     SongScreen Grid {
         grid-size: 3 4;
         grid-gutter: 1 2;
@@ -172,6 +174,9 @@ class SongScreen(ModalScreen[bool]):
         height: 14;
         border: thick $background 80%;
         background: $surface;
+        border-subtitle-color: red;
+        border-title-color: red;
+        border-title-align: center;
     }
     SongScreen > Container {
         height: 3;
@@ -192,9 +197,6 @@ class SongScreen(ModalScreen[bool]):
     SongScreen #favorite {
         min-width: 14;
     }
-    SongScreen EscButton {
-        padding-left: 2;
-    }
     SongScreen .hidden {
         display: none;
     }
@@ -212,7 +214,6 @@ class SongScreen(ModalScreen[bool]):
         self.song: Song | None = None
         self.got_favorited = favorited
         self.is_favorited = False
-        self.romaji_first = Config.get_config().display.romaji_first
 
     def compose(self) -> ComposeResult:
         yield EscButton()
@@ -224,18 +225,16 @@ class SongScreen(ModalScreen[bool]):
             yield Label("Album")
             yield Label("Source")
             yield Container(
-                ScrollableLabel(
-                    Text.from_markup(self.song.format_title(romaji_first=self.romaji_first) or ""), id="title"
-                ),
+                ScrollableLabel(Text.from_markup(self.song.format_title() or ""), id="title"),
                 ScrollableLabel(
                     *[Text.from_markup(f"[red]{artist}[/]") for artist in a]
-                    if (a := self.song.format_artists_list(romaji_first=self.romaji_first)) is not None
+                    if (a := self.song.format_artists_list()) is not None
                     else [],
                     id="artist",
                 ),
             )
-            album = self.song.format_album(romaji_first=self.romaji_first)
-            source = self.song.format_source(romaji_first=self.romaji_first)
+            album = self.song.format_album()
+            source = self.song.format_source()
             yield Container(
                 ScrollableLabel(
                     Text.from_markup(f"[green]{album}[/]" if album else ""),
@@ -297,16 +296,17 @@ class SongScreen(ModalScreen[bool]):
             raise Exception("Song cannot be None")
         self.song = song
         await self.recompose()
-        if client.logged_in and self.got_favorited is None:
-            self.is_favorited: bool = await client.check_favorite(song.id) or False
-        if self.got_favorited is not None:
+        self.query_one(Grid).border_subtitle = f"[{self.song.id}]"
+        self.query_one(Grid).border_title = f"Uploader: {self.song.uploader.display_name}" if self.song.uploader else ""
+        if self.got_favorited:
             self.is_favorited = self.got_favorited
+        elif client.logged_in:
+            self.is_favorited: bool = await client.check_favorite(song.id) or False
         self.query_one("#favorite", ToggleButton).set_toggle_state(self.is_favorited)
         self.query_one(Grid).loading = False
 
     def action_cancel(self) -> None:
-        if MPVThread.instance is not None:
-            self.run_worker(MPVThread.instance.terminate_preview, thread=True)
+        Thread(target=MPVThread.terminate_preview, name="terminate_preview", daemon=True).start()
         self.dismiss(self.is_favorited)
 
     @on(StaticButton.Pressed, "#preview")
@@ -316,33 +316,32 @@ class SongScreen(ModalScreen[bool]):
             self.notify("No snippet to preview", severity="warning", title="Preview")
             return
         self.query_one("#preview", StaticButton).disabled = True
-        MPVThread.preview(self.handle_preview_status, song.snippet, self.app)
+        MPVThread.preview(song.snippet, self.handle_preview_status)
 
     def handle_preview_status(self, data: PreviewStatus):  # noqa: PLR0911
-        self.log.debug(data)
         try:
             progress = self.query_one(DurationProgressBar)
-        except QueryError:
-            return
-        if data.state == PreviewType.LOCKED:
-            self.notify("Cannot preview two songs at the same time", title="Preview", severity="warning")
-            return
-        if data.state == PreviewType.UNABLE:
-            self.notify("Unable to play preview :(", title="Preview", severity="warning")
-            return
-        if data.state == PreviewType.PLAYING:
-            progress.reset()
-            progress.resume()
-            return
-        if data.state == PreviewType.DATA:
-            cache = cast(MPVThread.DemuxerCacheState, data.other)
-            progress.update_total(round(cache.cache_end))
-            return
-        if data.state == PreviewType.DONE:
-            self.query_one("#preview", StaticButton).disabled = False
-            return
-        if data.state == PreviewType.ERROR:
-            self.notify("An error has occured", title="Preview", severity="warning")
+            if data.state == PreviewType.LOCKED:
+                self.notify("Cannot preview two songs at the same time", title="Preview", severity="warning")
+                return
+            if data.state == PreviewType.UNABLE:
+                self.notify("Unable to play preview :(", title="Preview", severity="warning")
+                return
+            if data.state == PreviewType.PLAYING:
+                progress.reset()
+                progress.resume()
+                return
+            if data.state == PreviewType.DATA:
+                cache = cast(MPVThread.DemuxerCacheState, data.other)
+                progress.update_total(round(cache.cache_end))
+                return
+            if data.state == PreviewType.DONE:
+                self.query_one("#preview", StaticButton).disabled = False
+                return
+            if data.state == PreviewType.ERROR:
+                self.notify("An error has occured", title="Preview", severity="warning")
+                return
+        except Exception:
             return
 
     @on(ToggleButton.Pressed, "#favorite")
@@ -361,8 +360,8 @@ class SongScreen(ModalScreen[bool]):
         client = ListenClient.get_instance()
         res: Song | RequestError = await client.request_song(song.id, exception_on_error=False)
         if isinstance(res, Song):
-            title = res.format_title(romaji_first=self.romaji_first)
-            artist = res.format_artists(romaji_first=self.romaji_first)
+            title = res.format_title()
+            artist = res.format_artists()
             self.notify(
                 f"{title}" + f" by [{Theme.ACCENT}]{artist}[/]" if artist else "",
                 title="Sent to queue",
@@ -387,13 +386,14 @@ class OptionButton(Button):
         self.post_message(self.Selected(self.index))
 
 
-class SelectionScreen(ModalScreen[int | None]):
+class SelectionScreen(Screen[int | None]):
     """Screen for confirming actions"""
 
     DEFAULT_CSS = """
     SelectionScreen {
         align: center middle;
         background: $background;
+        hatch: left $background-lighten-1 60%;
     }
     SelectionScreen Container {
         width: auto;
@@ -491,11 +491,12 @@ class ArtistButton(Button):
         return text if len(text) <= max_length else text[: max_length - 1] + "…"
 
 
-class AlbumScreen(ModalScreen[None]):
+class AlbumScreen(Screen[None]):
     DEFAULT_CSS = """
     AlbumScreen {
         align: center middle;
         background: $background;
+        hatch: left $background-lighten-1 60%;
     }
     AlbumScreen #box {
         width: 100%;
@@ -543,9 +544,8 @@ class AlbumScreen(ModalScreen[None]):
         ("escape", "cancel"),
     ]
 
-    def __init__(self, album_id: AlbumID):
+    def __init__(self, album_id: AlbumID, album: Album | None = None):
         super().__init__()
-        self.romaji_first = Config.get_config().display.romaji_first
         self.album_id = album_id
         self.album: Album | None = None
 
@@ -560,10 +560,10 @@ class AlbumScreen(ModalScreen[None]):
                 if self.album.artists:
                     with Collapsible(title="Contributing artists:"), Grid():
                         for artist in self.album.artists:
-                            yield ArtistButton(artist.id, artist.format_name(romaji_first=self.romaji_first) or "")
+                            yield ArtistButton(artist.id, artist.format_name() or "")
                 if self.album.songs:
                     with VerticalScroll():
-                        yield SongListView(*[SongItem(song) for song in self.album.songs], initial_index=None)
+                        yield Lazy(SongListView(*[SongItem(song) for song in self.album.songs], initial_index=None))
 
     @on(SongListView.SongSelected)
     async def song_selected(self, event: SongListView.SongSelected) -> None:
@@ -580,16 +580,15 @@ class AlbumScreen(ModalScreen[None]):
 
     @work
     async def on_mount(self) -> None:
-        self.query_one("#box", Container).loading = True
-        self.album = await ListenClient.get_instance().album(self.album_id)
-        if self.album is None:
-            raise Exception("album cannot be None")
+        if not self.album:
+            self.query_one("#box", Container).loading = True
+            self.album = await ListenClient.get_instance().album(self.album_id)
+            if self.album is None:
+                raise Exception("album cannot be None")
 
-        await self.recompose()
+            await self.recompose()
         count = len(self.album.songs) if self.album.songs else 0
-        self.query_one("#name", Label).update(
-            f"{self.album.format_name(romaji_first=self.romaji_first)} - {count} Songs"
-        )
+        self.query_one("#name", Label).update(f"{self.album.format_name()} - {count} Songs")
         self.query_one("#links", Label).update(
             f"{self.album.format_socials(sep=' ') or '- No links for this album yet -'}"
         )
@@ -599,11 +598,12 @@ class AlbumScreen(ModalScreen[None]):
         self.dismiss()
 
 
-class ArtistScreen(ModalScreen[None]):
+class ArtistScreen(Screen[None]):
     DEFAULT_CSS = """
     ArtistScreen {
         align: center middle;
         background: $background;
+        hatch: left $background-lighten-1 60%;
     }
     ArtistScreen #box {
         width: 100%;
@@ -644,13 +644,13 @@ class ArtistScreen(ModalScreen[None]):
 
     def __init__(self, artist_id: ArtistID):
         super().__init__()
-        self.romaji_first = Config.get_config().display.romaji_first
         self.artist_id = artist_id
         self.artist: Artist | None = None
 
     def compose(self) -> ComposeResult:
+        # lazy for the win!!
         yield EscButton()
-        with Container(id="box"):
+        with Container(id="box"):  # noqa: PLR1702
             if self.artist is None:
                 return
             yield Center(Label(id="name"))
@@ -662,15 +662,16 @@ class ArtistScreen(ModalScreen[None]):
                 if self.artist.albums:
                     for album in self.artist.albums:
                         if album.songs:
-                            yield Collapsible(
-                                SongListView(*[SongItem(song) for song in album.songs], initial_index=None),
-                                title=f"{album.format_name(romaji_first=self.romaji_first)}\n{len(album.songs)} Songs",
-                            )
+                            with Collapsible(title=f"{album.format_name()}\n{len(album.songs)} Songs"), Lazy(
+                                SongListView(initial_index=None)
+                            ):
+                                yield from [SongItem(song) for song in album.songs]
+
                 if self.artist.songs_without_album:
-                    yield Collapsible(
-                        SongListView(*[SongItem(song) for song in self.artist.songs_without_album], initial_index=None),
-                        title=f"- No album -\n{len(self.artist.songs_without_album)} Songs",
-                    )
+                    with Collapsible(title=f"- No album -\n{len(self.artist.songs_without_album)} Songs"), Lazy(
+                        SongListView(initial_index=None)
+                    ):
+                        yield from [SongItem(song) for song in self.artist.songs_without_album]
 
     @on(SongListView.SongSelected)
     async def song_selected(self, event: SongListView.SongSelected) -> None:
@@ -703,7 +704,7 @@ class ArtistScreen(ModalScreen[None]):
             raise Exception("Cannot be None")
         self.artist = artist
         await self.recompose()
-        self.query_one("#name", Label).update(self.artist.format_name(romaji_first=self.romaji_first) or "")
+        self.query_one("#name", Label).update(self.artist.format_name() or "")
         self.query_one("#albums-count", Label).update(f"{self.artist.album_count or 'No'} Albums")
         self.query_one("#songs-count", Label).update(f"- {self.artist.song_count or 'No'} Songs")
         self.query_one("#links", Label).update(f"{self.artist.format_socials(sep=' ', use_app=True) or 'No Socials'}")
@@ -713,13 +714,14 @@ class ArtistScreen(ModalScreen[None]):
         self.dismiss()
 
 
-class ConfirmScreen(ModalScreen[bool]):
+class ConfirmScreen(Screen[bool]):
     """Screen for confirming actions"""
 
     DEFAULT_CSS = """
     ConfirmScreen {
         align: center middle;
         background: $background;
+        hatch: left $background-lighten-1 60%;
     }
 
     ConfirmScreen #dialog {
@@ -779,7 +781,7 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
-class TestScreen(ModalScreen[None]):
+class TestScreen(Screen[None]):
     DEFAULT_CSS = """
     TestScreen {
         align: center middle;
@@ -798,7 +800,10 @@ class EscButton(Static):
     DEFAULT_CSS = """
     EscButton {
         dock: top;
-        margin: 1 0;
+        offset: 2 1;
+        width: 7;
+        padding: 0 0 !important;
+        margin: 0 0 !important;
     }
     """
 

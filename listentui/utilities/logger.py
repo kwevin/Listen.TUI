@@ -18,7 +18,7 @@ class RichLogExtended(RichLog):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, max_lines=1000, highlight=True, markup=True, wrap=True, **kwargs)
-        self.fetcher = self.set_interval(5, self.action_empty_queue)
+        self.set_interval(5, self.action_empty_queue)
 
     def action_clear(self) -> None:
         self.clear()

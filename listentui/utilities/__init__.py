@@ -5,6 +5,11 @@ from listentui.utilities.logger import RichLogExtended, create_logger, get_logge
 __all__ = ["RichLogExtended", "create_logger", "format_time_since", "get_logger"]
 
 
+def de_kuten(word: str) -> str:
+    """Separates dakuten and handakuten"""
+    return word.replace("\u3099", "\u309b").replace("\u309a", "\u309c").replace("\u200b", "")
+
+
 def format_time_since(time: datetime, short_hand: bool = False) -> str:  # noqa: PLR0911
     now = datetime.now()
     diff = now - time

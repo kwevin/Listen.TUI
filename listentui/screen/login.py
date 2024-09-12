@@ -3,7 +3,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.containers import Center
 from textual.screen import Screen
-from textual.widgets import Label, Static
+from textual.widgets import Label
 
 from listentui.data.config import Config
 from listentui.listen.client import ListenClient
@@ -15,6 +15,12 @@ class LoginScreen(Screen[bool]):
         width: 1fr;
         height: 1fr;
         align: center middle;
+        background: $background;
+        hatch: left $background-lighten-1 60%;
+    }
+
+    Center {
+        hatch: left $background-lighten-1 60%;
     }
     Static {
         width: auto;
@@ -49,7 +55,7 @@ class LoginScreen(Screen[bool]):
         self.state = True
 
     def compose(self) -> ComposeResult:
-        yield Center(Static(self.SPLASH))
+        yield Center(Label(self.SPLASH))
         yield Center(Label(id="status"))
 
     def on_mount(self) -> None:
@@ -69,7 +75,7 @@ class LoginScreen(Screen[bool]):
         status = self.query_one("#status", Label)
         status.loading = False
         status.add_class("error")
-        status.update("Login failed, please check your username and password" if message is None else message)
+        status.update(message or "Login failed, please check your username and password")
 
     async def on_click(self) -> None:
         if not self.state:
@@ -82,9 +88,13 @@ class LoginScreen(Screen[bool]):
         password = config.client.password
         token = config.persistant.token
         if username and password:
-            client = await ListenClient.login(username, password, token)
-            if isinstance(client, TransportQueryError):
-                self.set_error(str(client.errors[0].get("message")) if client.errors else None)
+            try:
+                client = await ListenClient.login(username, password, token)
+                if isinstance(client, TransportQueryError):
+                    self.set_error(str(client.errors[0].get("message")) if client.errors else None)
+                    return
+            except TimeoutError:
+                self.set_error("Login took too long, please check your internet connection and restart the app")
                 return
         else:
             client = ListenClient.get_instance()

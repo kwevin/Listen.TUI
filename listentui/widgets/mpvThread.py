@@ -12,29 +12,10 @@ from typing import Any, Callable, Self, Type
 
 from mpv import MPV, MpvEvent, MpvEventEndFile, ShutdownError
 from rich.repr import Result, RichReprResult
-from textual.app import App
 from textual.message import Message
 from textual.widget import Widget
 
 from listentui.data.config import Config
-
-_pv_lock = Lock()
-
-
-def pv_log_handler(loglevel: str, component: str, message: str):
-    if component == "display-tags":
-        return
-    match loglevel:
-        case "info":
-            level = INFO
-        case "warn":
-            level = WARNING
-        case "debug":
-            level = DEBUG
-        case _:
-            level = DEBUG
-    logger = getLogger(__name__)
-    logger.log(level=level, msg=f"[{component}] {message}")  # noqa: G004
 
 
 class PreviewType(Enum):
@@ -63,14 +44,15 @@ class MPVWatcher(Thread):
         self._log = getLogger(__name__)
         self.is_terminated = False
         self.player = thread
-        self.base_timeout = 20
+        self.base_timeout = Config.get_config().player.restart_timeout
         self.retries = 0
         self.soft_retry_cap = 5
         self.hard_retry_cap = 10
         self.timeout_cap = 60
+        self.terminated = False
 
     def run(self) -> None:
-        while True:
+        while not self.terminated:
             if not self.is_player_alive():
                 sleep(1)
                 self._log.debug("Player is not alive, sleeping...")
@@ -80,10 +62,11 @@ class MPVWatcher(Thread):
                 sleep(1)
                 continue
             if self.is_not_playing():
-                self.dispatch_restart()
+                sleep(Config.get_config().player.inactivity_timeout)
+                if self.is_not_playing():
+                    self.dispatch_restart()
                 continue
-            sleep(5)
-            continue
+            sleep(1)
 
     def is_player_alive(self) -> bool:
         return not self.player.player.core_shutdown
@@ -116,10 +99,13 @@ class MPVWatcher(Thread):
                 self.player.FailedRestart(self.retries, timeout, self.soft_retry_cap, self.hard_retry_cap)
             )
 
+    def terminate(self) -> None:
+        self.terminated = True
+
 
 class MPVThread(Thread):
     instance: MPVThread | None = None
-    pv_player: MPV | None = None
+    pv_thread: MPVPreviewer | None = None
 
     def __init__(self, main: Widget) -> None:
         super().__init__(name="MPVThread", daemon=True)
@@ -131,9 +117,8 @@ class MPVThread(Thread):
         self.cache: MPVThread.DemuxerCacheState | None = None
         self._metadata: MPVThread.Metadata | None = None
         self._log = getLogger(__name__)
-        self._idle_count = 0
-        self._state_lock = Lock()
         self._restart_lock = Lock()
+        self.terminated = False
 
     class Started(Message):
         def __init__(self) -> None:
@@ -314,14 +299,22 @@ class MPVThread(Thread):
             self.main.post_message(self.Fail())
             return
 
-    def start_mpv(self, timeout: int = 120) -> None:
+        while not self.terminated:
+            sleep(1)
+        MPVThread.instance = None
+        return
+
+    def setup_mpv(self, timeout: int = 120) -> None:
         self.player.play(self.stream_url)
         self.player.wait_until_playing(timeout=timeout)
-        MPVThread.instance = self
-        self.main.post_message(self.Started())
         # self.player.observe_property("core-idle", self._watch_core_idle)
         self.player.observe_property("metadata", self._watch_metadata)
         self.player.observe_property("demuxer-cache-state", self._watch_cache)
+
+    def start_mpv(self, timeout: int = 120) -> None:
+        self.setup_mpv(timeout)
+        MPVThread.instance = self
+        self.main.post_message(self.Started())
 
     @staticmethod
     def get_options() -> dict[str, Any]:
@@ -420,75 +413,87 @@ class MPVThread(Thread):
 
     def terminate(self) -> None:
         self.player.terminate()
-        MPVThread.instance = None
+        self.watcher.terminate()
+        self.terminated = True
 
     @staticmethod
     def terminate_preview() -> None:
-        if MPVThread.pv_player:
-            MPVThread.pv_player.terminate()
-
-        player = MPVThread.instance
-        if player and player.paused is not None and player.paused:
-            player.play()
+        if MPVThread.pv_thread and MPVThread.pv_thread.is_alive():
+            MPVThread.pv_thread.terminate()
+            MPVThread.pv_thread.join(timeout=20)
 
     @staticmethod
-    def preview(callback: Callable[[PreviewStatus], Any], song_url: str, app: App[Any]) -> None:
-        if _pv_lock.locked():
+    def preview(song_url: str, callback: Callable[[PreviewStatus], Any]) -> None:
+        final_url = f"https://cdn.listen.moe/snippets/{song_url}".strip()
+        if MPVThread.pv_thread and MPVThread.pv_thread.is_alive():
             callback(PreviewStatus(PreviewType.LOCKED))
-        else:
-            Thread(target=MPVThread._preview, args=(callback, song_url, app)).start()
+            return
+        MPVThread.pv_thread = MPVPreviewer(final_url, callback, MPVThread.instance)
+        MPVThread.pv_thread.start()
 
-    @staticmethod
-    def _preview(
-        callback: Callable[[PreviewStatus], Any],
-        song_url: str,
-        app: App[Any],
+
+class MPVPreviewer(Thread):
+    def __init__(
+        self, final_url: str, callback: Callable[[PreviewStatus], Any], main_player: MPVThread | None = None
     ) -> None:
-        with _pv_lock:
-            final_url = f"https://cdn.listen.moe/snippets/{song_url}".strip()
-            options = MPVThread.get_options()
-            player = MPVThread.instance
-            if player and player.volume and player.volume != 0:
-                options["volume"] = player.volume
-            options.update({"cache": True, "cache_pause_initial": True, "cache_pause_wait": 15})
-            MPVThread.pv_player = MPV(ytdl=True, terminal=False, **options, log_handler=pv_log_handler)
-            pv_player = MPVThread.pv_player
+        super().__init__(name="MPVPreviewer", daemon=True)
+        self.final_url = final_url
+        self.callback = callback
+        self.main_player = main_player
+        self.terminated = False
+        self.player: MPV | None = None
 
-            @MPVThread.pv_player.event_callback("end-file")
-            def check(event: MpvEvent):  # type: ignore
-                with contextlib.suppress(RuntimeError):
-                    if isinstance(event.data, MpvEventEndFile) and event.data.reason == MpvEventEndFile.ERROR:
-                        app.call_from_thread(callback, PreviewStatus(PreviewType.UNABLE))
-                        pv_player.wait_for_shutdown()  # type: ignore
+    def run(self) -> None:
+        options = MPVThread.get_options()
+        if self.main_player and self.main_player.volume and self.main_player.volume != 0:
+            options["volume"] = self.main_player.volume
+        options.update({"cache": True, "cache_pause_initial": True, "cache_pause_wait": 15})
+        player = MPV(ytdl=True, terminal=False, **options)
+        self.player = player
 
-            def data(_: dict[str, Any], new_value: dict[str, Any] | None) -> None:
-                with contextlib.suppress(RuntimeError):
-                    if new_value is None:
-                        return
-                    pv_data = MPVThread.DemuxerCacheState.from_cache_state(new_value)
-                    app.call_from_thread(callback, PreviewStatus(PreviewType.DATA, pv_data))
+        def safe_call(*args: PreviewStatus):
+            if self.terminated:
+                return
+            Thread(target=self.callback, args=args, daemon=True).start()
 
-            def safe_play() -> None:
-                with contextlib.suppress(TimeoutError, ShutdownError):
-                    if player:
-                        player.play()
-
+        def safe_play():
             try:
-                pv_player.play(final_url)
-                pv_player.wait_for_property("demuxer-cache-state", cond=bool)
-                pv_player.observe_property("demuxer-cache-state", data)
-                pv_player.wait_until_playing()
-                app.call_from_thread(callback, PreviewStatus(PreviewType.PLAYING))
-                if player:
-                    player.pause()
-                pv_player.wait_for_playback()
-                app.call_from_thread(callback, PreviewStatus(PreviewType.FINISHED))
+                if self.main_player:
+                    self.main_player.play()
             except Exception:
-                with contextlib.suppress(RuntimeError):
-                    app.call_from_thread(callback, PreviewStatus(PreviewType.ERROR))
-            finally:
-                pv_player.terminate()
-                if player and player.paused is not None and player.paused:
-                    Thread(target=safe_play).start()
-        with contextlib.suppress(RuntimeError):
-            app.call_from_thread(callback, PreviewStatus(PreviewType.DONE))
+                pass
+
+        @player.event_callback("end-file")
+        def check(event: MpvEvent):  # type: ignore
+            if isinstance(event.data, MpvEventEndFile) and event.data.reason == MpvEventEndFile.ERROR:
+                safe_call(PreviewStatus(PreviewType.UNABLE))
+                self.terminated = True
+
+        @player.property_observer("demuxer-cache-state")
+        def data(property_name: Any, new_value: dict[str, Any] | None) -> None:  # type: ignore
+            if new_value is None:
+                return
+            pv_data = MPVThread.DemuxerCacheState.from_cache_state(new_value)
+            safe_call(PreviewStatus(PreviewType.DATA, pv_data))
+
+        try:
+            player.play(self.final_url)
+            player.wait_until_playing(timeout=20)
+            safe_call(PreviewStatus(PreviewType.PLAYING))
+            if self.main_player:
+                self.main_player.pause()
+            player.wait_for_playback(timeout=20)
+            safe_call(PreviewStatus(PreviewType.FINISHED))
+        except Exception:
+            safe_call(PreviewStatus(PreviewType.ERROR))
+        else:
+            safe_call(PreviewStatus(PreviewType.DONE))
+
+        player.terminate()
+        if self.main_player and self.main_player.paused is not None and self.main_player.paused:
+            Thread(name="restarting mpv", target=safe_play, daemon=True).start()
+
+    def terminate(self) -> None:
+        self.terminated = True
+        if self.player:
+            self.player.terminate()

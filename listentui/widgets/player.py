@@ -1,14 +1,21 @@
-# pyright: reportUnknownMemberType=false, reportMissingTypeStubs=false
+# pyright: reportMissingTypeStubs=false
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from datetime import datetime, timedelta
+from enum import Enum
 from logging import getLogger
+from string import Template
 from typing import Any, cast
 
 import websockets.client as websockets
+from pypresence import AioPresence, DiscordNotFound  # type: ignore
+from pypresence.exceptions import PipeClosed, ResponseTimeout
+from pypresence.payloads import Payload  # type: ignore
+from rich.pretty import pretty_repr
 from textual import on, work
 from textual.app import ComposeResult
 from textual.containers import Horizontal
@@ -18,12 +25,130 @@ from textual.widget import Widget
 from textual.widgets import Label
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
+from listentui.data.config import Config
 from listentui.listen.client import ListenClient
 from listentui.listen.interface import ListenWsData, Song
 from listentui.widgets.durationProgressBar import DurationProgressBar
 from listentui.widgets.mpvThread import MPVThread
 from listentui.widgets.songContainer import SongContainer
 from listentui.widgets.vanityBar import VanityBar
+
+PRESENSE_APPLICATION_ID = 1042365983957975080
+
+
+class Activity(Enum):
+    PLAYING = 0
+    _STREAMING = 1
+    LISTENING = 2
+    WATCHING = 3
+    _CUSTOM = 4
+    COMPETING = 5
+
+
+class AioPresence(AioPresence):
+    async def update(
+        self,
+        pid: int = os.getpid(),
+        state: str | None = None,
+        details: str | None = None,
+        start: int | None = None,
+        end: int | None = None,
+        large_image: str | None = None,
+        large_text: str | None = None,
+        small_image: str | None = None,
+        small_text: str | None = None,
+        party_id: str | None = None,
+        party_size: list[int] | None = None,
+        join: str | None = None,
+        spectate: str | None = None,
+        match: str | None = None,
+        buttons: list[dict[str, str]] | None = None,
+        instance: bool = True,
+        type: int | None = None,  # noqa: A002
+    ) -> dict[str, Any]:
+        payload = Payload.set_activity_with_type(
+            pid=pid,
+            state=state,
+            details=details,
+            start=start,
+            end=end,
+            large_image=large_image,
+            large_text=large_text,
+            small_image=small_image,
+            small_text=small_text,
+            party_id=party_id,
+            party_size=party_size,
+            join=join,
+            spectate=spectate,
+            match=match,
+            buttons=buttons,
+            instance=instance,
+            type=type,
+            activity=True,
+        )
+        self.send_data(1, payload)  # type: ignore
+        return await self.read_output()
+
+
+class Payload(Payload):
+    @classmethod
+    def set_activity_with_type(
+        cls,
+        pid: int = os.getpid(),
+        state: str | None = None,
+        details: str | None = None,
+        start: int | None = None,
+        end: int | None = None,
+        large_image: str | None = None,
+        large_text: str | None = None,
+        small_image: str | None = None,
+        small_text: str | None = None,
+        party_id: str | None = None,
+        party_size: list[int] | None = None,
+        join: str | None = None,
+        spectate: str | None = None,
+        match: str | None = None,
+        buttons: list[dict[str, str]] | None = None,
+        instance: bool = True,
+        type: int | None = None,  # noqa: A002
+        activity: bool | None = True,
+        _rn: bool = True,
+    ):
+        if start:
+            start = int(start)
+        if end:
+            end = int(end)
+
+        if activity is None:
+            act_details = None
+            clear = True
+        else:
+            act_details = {  # type: ignore
+                "type": type,
+                "state": state,
+                "details": details,
+                "timestamps": {"start": start, "end": end},
+                "assets": {
+                    "large_image": large_image,
+                    "large_text": large_text,
+                    "small_image": small_image,
+                    "small_text": small_text,
+                },
+                "party": {"id": party_id, "size": party_size},
+                "secrets": {"join": join, "spectate": spectate, "match": match},
+                "buttons": buttons,
+                "instance": instance,
+            }
+            clear = False
+
+        payload = {  # type: ignore
+            "cmd": "SET_ACTIVITY",
+            "args": {"pid": pid, "activity": act_details},
+            "nonce": "{:.20f}".format(cls.time()),
+        }
+        if _rn:
+            clear = _rn
+        return cls(payload, clear)  # type: ignore
 
 
 class Player(Widget):
@@ -79,25 +204,37 @@ class Player(Widget):
         self.mpv_time = 0
         self.start_time = time.time()
         self.mpv_cache: MPVThread.DemuxerCacheState | None = None
+        self.presence = AioPresence(PRESENSE_APPLICATION_ID)
+        self.presense_connected = False
         # self.can_update = True
         self.set_interval(1, self.update_time_elapsed)
         self.set_interval(1, self.update_cache)
         self.websocket_update = Signal[ListenWsData](self, "ws_update")
 
     def compose(self) -> ComposeResult:
+        yield VanityBar()
         yield SongContainer()
         yield self.progress_bar
         with Horizontal(id="debug"):
             yield Label(id="retries")
             yield Label(id="heartbeat")
+            yield Label(id="rpc")
             yield Label(id="delay")
             yield Label(id="cache")
             yield Label(id="time")
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         self.loading = True
         self.websocket()
         self.player.start()
+
+        if Config.get_config().presence.enable:
+            await self.connect_presense()
+        else:
+            self.query_one("#rpc", Label).styles.display = "none"
+
+        if not Config.get_config().advance.stats_for_nerd:
+            self.query_one("#debug").styles.display = "none"
 
         self.query_one("#delay", Label).tooltip = "Delay"
         self.query_one("#cache", Label).tooltip = "Cache"
@@ -147,9 +284,17 @@ class Player(Widget):
         label.tooltip = f"Last: {status.last_heartbeat.strftime('%H:%M:%S')}"
 
     @on(WebsocketUpdated)
-    def update_websocket_time(self, _: None) -> None:
+    def update_websocket_time(self, _) -> None:
         self.websocket_time = time.time()
         self.update_delay()
+
+    @on(WebsocketUpdated)
+    def show_toast(self, event: WebsocketUpdated) -> None:
+        if self.visible:
+            return
+        title = event.data.song.format_title()
+        artist = event.data.song.format_artists()
+        self.notify(f"{title}" + f"\n[red]{artist}[/]" if artist else "", title="Now Playing")
 
     @on(MPVThread.Started)
     def on_started(self) -> None:
@@ -167,9 +312,13 @@ class Player(Widget):
 
     @work
     async def update_container(self, data: ListenWsData) -> None:
-        self.query_one(SongContainer).update_song(cast(Song, await ListenClient.get_instance().song(data.song.id)))
+        song = cast(Song, await ListenClient.get_instance().song(data.song.id))
+        self.query_one(SongContainer).update_song(song)
         self.query_one(VanityBar).update_vanity(data)
         self.loading = False
+
+        if Config.get_config().presence.enable:
+            self.update_presense(data, song)
 
     # @work(group="wait_update", exclusive=True)
     # async def can_force_update(self, data: ListenWsData) -> None:
@@ -196,7 +345,7 @@ class Player(Widget):
 
     @on(MPVThread.Fail)
     def player_failed(self, event: MPVThread.Fail) -> None:
-        self.app.exit(message="Player failed to connect / regain connection")
+        self.app.exit(return_code=1, message="Player failed to connect / regain connection")
 
     @work(exclusive=True, group="websocket")
     async def websocket(self) -> None:
@@ -237,3 +386,105 @@ class Player(Widget):
                 await self._ws.send(json.dumps({"op": 9}))
         except (ConnectionClosedOK, ConnectionError):
             return
+
+    async def connect_presense(self) -> None:
+        try:
+            await self.presence.connect()
+            self.presense_connected = True
+            self.query_one("#rpc", Label).update("[green]RPC[/]")
+        except DiscordNotFound:
+            self.query_one("#rpc", Label).update("[red]RPC[/]")
+            self.query_one("#rpc", Label).tooltip = "Discord Not Found"
+            return
+
+    def sanitise(self, string: str) -> str:
+        default = Config.get_config().presence.default_placeholder
+        # discord limit
+        min_length = 2
+        max_length = 128
+
+        if len(string.strip()) < min_length:
+            string += default
+            return string.strip()
+        if len(string) >= max_length:
+            return f"{string[0:125]}..."
+        return string
+
+    def substitute(self, string: str, substitution: dict[str, str]) -> str | None:
+        subbed = Template(string).safe_substitute(substitution)
+        return self.sanitise(final) if (final := subbed.strip()) else None
+
+    def get_large_image(self, song: Song) -> str | None:
+        config = Config.get_config().presence
+        use_fallback = config.use_fallback
+        fallback = config.fallback
+        use_artist = config.use_artist
+
+        album = song.album_image()
+        if album:
+            return album
+
+        artist_image = song.artist_image()
+        if use_artist and artist_image:
+            return artist_image
+
+        return fallback if use_fallback else None
+
+    def get_small_image(self, song: Song) -> str | None:
+        config = Config.get_config().presence
+        return song.artist_image() if config.show_artist_as_small_icon else None
+
+    def get_epoch_end_time(self, song: Song) -> int | None:
+        return song.time_end if song.duration else None
+
+    @work
+    async def update_presense(self, data: ListenWsData, song: Song) -> None:
+        if not self.presense_connected:
+            await self.connect_presense()
+        config = Config.get_config().presence
+
+        substitution_dict: dict[str, str] = {
+            "id": str(song.id),
+            "title": song.format_title() or "",
+            "artist": song.format_artists() or "",
+            "artist2": song.format_artists(show_character=False) or "",
+            "artist_image": song.artist_image() or "",
+            "album": song.format_album() or "",
+            "album_image": song.album_image() or "",
+            "source": song.format_source() or "",
+            "source2": f"[{source}]" if (source := song.format_source()) else "",
+            "source_image": song.source_image() or "",
+            "requester": data.requester.display_name if data.requester else "",
+            "event": data.event.name if data.event else "",
+        }
+
+        presense_type = Activity(config.type)
+        large_image = self.get_large_image(song)
+        small_image = self.get_small_image(song)
+
+        try:
+            res = await self.presence.update(
+                details=self.substitute(config.detail, substitution_dict),
+                state=self.substitute(config.state, substitution_dict),
+                end=self.get_epoch_end_time(song) if config.show_time_left else None,
+                large_image=self.get_large_image(song),
+                large_text=self.substitute(config.large_text, substitution_dict),
+                small_image=small_image if large_image != small_image else None,
+                small_text=self.substitute(config.small_text, substitution_dict),
+                # seems like discord deprecated buttons from rpc
+                # (or smth changed and this stopped working)
+                buttons=[{"label": "Join radio", "url": "https://listen.moe/"}],
+                type=presense_type.value,
+            )
+            self._log.debug(pretty_repr(res))
+        except (PipeClosed, BrokenPipeError, ResponseTimeout, asyncio.CancelledError, TimeoutError):
+            self.presense_connected = False
+            self.query_one("#rpc", Label).update("[red]RPC[/]")
+            self._log.info("Unable to update presense")
+        except Exception:
+            self.query_one("#rpc", Label).update("[red]RPC[/]")
+            self._log.exception("Something went wrong with updating discord presense")
+
+    async def on_unmount(self) -> None:
+        if self.presense_connected:
+            await self.presence.clear()

@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import ClassVar
+from typing import ClassVar, Sequence
 
 from rich.style import Style
 from rich.text import Text
@@ -11,7 +11,7 @@ from textual.coordinate import Coordinate
 from textual.fuzzy import Matcher
 from textual.reactive import var
 from textual.types import NoSelection
-from textual.widgets import Input, Label, Select
+from textual.widgets import DataTable, Input, Label, Select
 from textual.widgets.data_table import RowKey
 
 from listentui.data.theme import Theme
@@ -25,8 +25,7 @@ from listentui.screen.modal import (
     SongScreen,
     SourceScreen,
 )
-from listentui.utilities import format_time_since
-from listentui.widgets.dataTables import ExtendedDataTable as DataTable
+from listentui.utilities import de_kuten, format_time_since
 
 
 class MarkupMatcher(Matcher):
@@ -90,7 +89,7 @@ class HistoryPage(BasePage):
         self.client = ListenClient.get_instance()
         self.favorited: dict[SongID, bool] = {}
         self.table_lookup: dict[RowKey, PlayStatistics] = {}
-        self.table = DataTable(zebra_stripes=True)
+        self.table: DataTable[str | Text | None] = DataTable(zebra_stripes=True)
         self.last_pos = 0
         self.input = Input(placeholder="Search to filter")
         self.last_updated_time = datetime.now()
@@ -116,7 +115,6 @@ class HistoryPage(BasePage):
 
     @work
     async def watch_history_result(self, new_value: list[PlayStatistics]) -> None:
-        self.table.loading = True
         if self.client.logged_in:
             not_found = [his.song.id for his in new_value if self.favorited.get(his.song.id) is None]
             self.favorited.update(dict.fromkeys(not_found, False))
@@ -126,11 +124,9 @@ class HistoryPage(BasePage):
         self.update_time_since()
         self.populate_table()
 
-    def on_mount(self) -> None:
-        self.action_refresh()
-
     def on_show(self) -> None:
         self.update_time_since()
+        self.action_refresh()
 
     def update_time_since(self) -> None:
         self.query_one(Label).update(f"Last Updated: {format_time_since(self.last_updated_time)}")
@@ -140,23 +136,19 @@ class HistoryPage(BasePage):
         self.table.clear()
         self.table_lookup = {}
 
-        def ensure_string(obj: list[str | Text | None]) -> list[Text | str]:
-            return [x or "" for x in obj]
-
         now = datetime.now()
-        romaji_first = self.config.display.romaji_first
 
         for history in self.history_result:
             sid = history.song.id
             song = history.song
-            rows = [
+            rows: Sequence[str | Text] = [
                 Text(str(sid), style=f"{Theme.ACCENT}") if self.favorited.get(song.id) else Text(str(song.id)),
-                song.format_title(romaji_first=romaji_first),
-                Text(str(history.requester.display_name), style=f"{Theme.ACCENT}") if history.requester else "",
+                de_kuten(song.format_title() or ""),
+                Text(de_kuten(history.requester.display_name), style=f"{Theme.ACCENT}") if history.requester else "",
                 history.created_at.strftime("%d-%m-%Y %H:%M:%S"),
-                song.format_artists(romaji_first=romaji_first),
-                song.format_album(romaji_first=romaji_first),
-                song.format_source(romaji_first=romaji_first),
+                de_kuten(song.format_artists() or ""),
+                de_kuten(song.format_album() or ""),
+                de_kuten(song.format_source() or ""),
             ]
 
             # filter by time
@@ -164,7 +156,7 @@ class HistoryPage(BasePage):
                 minutes=self.time_filter.value
             ):
                 continue
-            # filter by search_value
+            # filter by search_string
             if self.input.value:
                 search_string = self.input.value
                 threshold = 0.7
@@ -173,8 +165,7 @@ class HistoryPage(BasePage):
                 if not any(matcher.match(str(row)) > threshold for row in rows):
                     continue
 
-                rows = matcher.highlights(ensure_string(rows))
-                self._log.debug(rows)
+                rows = matcher.highlights(rows)
 
             key = self.table.add_row(*rows, height=None)
             self.table_lookup[key] = history
@@ -183,8 +174,6 @@ class HistoryPage(BasePage):
             self.table.add_rows(["", ""])
             self.table.add_row("", "", "", "Load More", "", "", "")
             self.table.move_cursor(row=self.last_pos, column=0)
-
-        self.table.loading = False
 
     def on_input_changed(self, event: Input.Changed) -> None:
         self.populate_table()
@@ -233,7 +222,6 @@ class HistoryPage(BasePage):
         if not self.client.logged_in:
             return
 
-        romaji_first = self.config.display.romaji_first
         song = self.get_song(rowkey)
         state = not self.favorited[song.id]
         self.favorited[song.id] = state
@@ -241,7 +229,7 @@ class HistoryPage(BasePage):
 
         new_value = Text(str(song.id), style=f"{Theme.ACCENT}") if state else Text(str(song.id))
         self.table.update_cell_at(coordinate, new_value)
-        self.notify(f"{'Favorited' if state else 'Unfavorited'} " + f"{song.format_title(romaji_first=romaji_first)}")
+        self.notify(f"{'Favorited' if state else 'Unfavorited'} " + f"{song.format_title()}")
 
     @work
     async def show_song(self, rowkey: RowKey, coordinate: Coordinate) -> None:
@@ -260,11 +248,10 @@ class HistoryPage(BasePage):
         if not song.artists:
             return
 
-        romaji_first = self.config.display.romaji_first
         if len(song.artists) == 1:
             self.app.push_screen(ArtistScreen(song.artists[0].id))
         else:
-            options = song.format_artists_list(romaji_first=romaji_first)
+            options = song.format_artists_list()
             if not options:
                 return
             result = await self.app.push_screen_wait(SelectionScreen(options))
@@ -294,6 +281,3 @@ class HistoryPage(BasePage):
     #     history[latest.song.id] = latest
     #     history.update(self.history_result)
     #     self.history_result = history
-
-
-# TODO: TransportAlreadyConnected
